@@ -135,11 +135,11 @@ mod yum_tests {
     fn gets_accounts() {
         thread::sleep(Duration::from_millis(2000));
 
-        let eth_account = "0000000000000000000000000000000000000000";
+        let eth_account = "0x0000000000000000000000000000000000000000";
         let eth_as_h160 = H160::from_str("0000000000000000000000000000000000000000").unwrap();
-        let response = serde_json::to_value(vec)
+        let response = serde_json::to_value(vec![Value::String(eth_account.into())]).unwrap();
         let (server, server_thread) = setup_websocket(
-            3104, "eth_accounts", vec![Value::String(eth_account.into())])
+            3104, "eth_accounts", response
         );
 
         thread::sleep(Duration::from_millis(2000));
@@ -152,13 +152,10 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        assert_eq!(format!("{:?}", account_op), format!("{:?}", eth_as_h160));
+        assert_eq!(format!("{:?}", account_op.get(0).unwrap()), format!("{:?}", eth_as_h160));
         assert!(server.shutdown().is_ok());
         assert!(server_thread.join().is_ok());
     }
-
-
-
 }
 
 

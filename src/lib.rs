@@ -1,5 +1,4 @@
 #![feature(integer_atomics)]
-#![feature(proc_macro, conservative_impl_trait, generators)]
 
 extern crate crossbeam;
 

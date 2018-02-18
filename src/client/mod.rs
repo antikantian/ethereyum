@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::{self, io};
 use std::marker::PhantomData;
 use std::sync::{self, Arc};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::convert::From;
@@ -25,12 +25,12 @@ use error::{Error, ErrorKind};
 
 #[derive(Debug)]
 pub enum RpcResponse {
-    Success { id: u64, result: Value },
-    Failure { id: u64, result: Error }
+    Success { id: usize, result: Value },
+    Failure { id: usize, result: Error }
 }
 
 impl RpcResponse {
-    pub fn into_response(self) -> (u64, Result<Value, Error>) {
+    pub fn into_response(self) -> (usize, Result<Value, Error>) {
         match self {
             RpcResponse::Success { id, result } => (id, Ok(result)),
             RpcResponse::Failure { id, result } => (id, Err(result))
@@ -38,7 +38,7 @@ impl RpcResponse {
     }
 }
 
-type PendingRequests = Arc<Mutex<FnvHashMap<u64, oneshot::Sender<Result<Value, Error>>>>>;
+type PendingRequests = Arc<Mutex<FnvHashMap<usize, oneshot::Sender<Result<Value, Error>>>>>;
 
 // Using Fowler-Noll-Vo hasher because we're using integer keys and I'm a loser.
 // See: http://cglab.ca/%7Eabeinges/blah/hash-rs/
@@ -48,9 +48,9 @@ type PendingRequests = Arc<Mutex<FnvHashMap<u64, oneshot::Sender<Result<Value, E
 // have went with std::collections::ThatHashMapThatMightBeFivePicoSecondsSlower
 pub struct Client {
     host: String,
-    worker_id: Arc<AtomicU64>,
+    worker_id: Arc<AtomicUsize>,
     sockets: Arc<Mutex<VecDeque<SocketWorker>>>,
-    ids: Arc<AtomicU64>,
+    ids: Arc<AtomicUsize>,
     pending: PendingRequests
 }
 
@@ -60,9 +60,9 @@ impl Client {
 
         let mut client = Client {
             host: host.to_string(),
-            worker_id: Arc::new(AtomicU64::new(0)),
+            worker_id: Arc::new(AtomicUsize::new(0)),
             sockets: Arc::new(Mutex::new(VecDeque::new())),
-            ids: Arc::new(AtomicU64::new(0)),
+            ids: Arc::new(AtomicUsize::new(0)),
             pending: requests
         };
 
@@ -108,7 +108,7 @@ impl Client {
         Ok(())
     }
 
-    fn next_id(&self) -> u64 {
+    fn next_id(&self) -> usize {
         self.ids.fetch_add(1, Ordering::Relaxed)
     }
 
@@ -156,7 +156,7 @@ struct SocketWorker {
 }
 
 impl SocketWorker {
-    pub fn new(id: u64, host: &str, pending: PendingRequests) -> Result<Self, Error> {
+    pub fn new(id: usize, host: &str, pending: PendingRequests) -> Result<Self, Error> {
         trace!("Attempting to start new socket with id: {}, connecting to: {}", &id, &host);
         let (ws_tx, closed, shutdown, ws_thread) = SocketWorker::start(id, host, pending)?;
 
@@ -186,7 +186,7 @@ impl SocketWorker {
         Ok(())
     }
 
-    fn start(id: u64, host: &str, pending: PendingRequests)
+    fn start(id: usize, host: &str, pending: PendingRequests)
              -> Result<(
                  ws::Sender, Arc<AtomicBool>, Arc<AtomicBool>, thread::JoinHandle<()>
              ), Error>
@@ -333,13 +333,13 @@ enum MessageState {
 }
 
 pub struct ClientResponse {
-    id: u64,
+    id: usize,
     state: MessageState
 }
 
 impl ClientResponse {
     pub fn new(
-        id: u64,
+        id: usize,
         send_status: Result<(), Error>,
         rx: oneshot::Receiver<Result<Value, Error>>) -> Self
     {
@@ -441,11 +441,11 @@ fn handle_output(output: rpc::Output) -> Result<RpcResponse, Error> {
 fn handle_success(success: rpc::Success) -> Result<RpcResponse, Error> {
     if let rpc::Id::Num(response_id) = success.id {
         Ok(RpcResponse::Success {
-            id: response_id,
+            id: response_id as usize,
             result: success.result
         })
     } else {
-        let err_message = format!("invalid correlation id, expected u64, got: {:?}", success.id);
+        let err_message = format!("invalid correlation id, expected int, got: {:?}", success.id);
         Err(ErrorKind::RpcError(err_message).into())
     }
 }
@@ -453,21 +453,21 @@ fn handle_success(success: rpc::Success) -> Result<RpcResponse, Error> {
 fn handle_failure(failure: rpc::Failure) -> Result<RpcResponse, Error> {
     if let rpc::Id::Num(response_id) = failure.id {
         Ok(RpcResponse::Failure {
-            id: response_id,
+            id: response_id as usize,
             result: ErrorKind::YumError(format!("{:?}", failure.error)).into()
         })
     } else {
-        let err_message = format!("invalid correlation id, expected u64, got: {:?}", failure.id);
+        let err_message = format!("invalid correlation id, expected int, got: {:?}", failure.id);
         Err(ErrorKind::RpcError(err_message).into())
     }
 }
 
-pub fn build_request(id: u64, method: &str, params: Vec<Value>) -> rpc::Call {
+pub fn build_request(id: usize, method: &str, params: Vec<Value>) -> rpc::Call {
     rpc::Call::MethodCall(rpc::MethodCall {
         jsonrpc: Some(rpc::Version::V2),
         method: method.to_string(),
         params: Some(rpc::Params::Array(params)),
-        id: rpc::Id::Num(id)
+        id: rpc::Id::Num(id as u64)
     })
 }
 
