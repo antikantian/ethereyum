@@ -1,32 +1,27 @@
-use std::collections::BTreeMap;
-use std::io;
+use std::collections::VecDeque;
+use std::{self, io};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::convert::From;
 
-use serde::de::DeserializeOwned;
 use crossbeam_channel as channel;
 use futures::future::IntoFuture;
-use crossbeam_deque::{Deque, Steal, Stealer};
 use fnv::FnvHashMap;
-use futures::{self, Async, Canceled, Future, Stream, Sink};
-use std::io::{Read, Write};
+use futures::{Async, Poll, Future, Stream, Sink};
 use futures::sync::{oneshot, mpsc};
-use futures::sync::oneshot::Receiver;
 use parking_lot::Mutex;
-use rpc::{self, Response, Output};
+use rpc::{self, Output};
 use serde_json::{self, Value};
 use ws;
-use serde::de::Deserializer;
-use futures::prelude::*;
-use futures_cpupool::CpuPool;
 use futures::future::lazy;
 use tokio::executor::current_thread;
-use futures::future::FutureResult;
 
 use error::{Error, ErrorKind};
 
+pub mod result;
+
+pub use self::result::{YumResult};
 
 #[derive(Debug)]
 pub enum RpcResponse {
@@ -47,39 +42,35 @@ type PendingRequests = Arc<Mutex<FnvHashMap<u64, oneshot::Sender<Result<Value, E
 
 // Using Fowler-Noll-Vo hasher because it performs significantly better
 // with integer keys.  See: http://cglab.ca/%7Eabeinges/blah/hash-rs/
+// This is probably insignificant since we're not expecting that many concurrent requests
 pub struct Client {
-    socket: Arc<RpcSocket>,
+    host: String,
+    sockets: Arc<Mutex<VecDeque<mpsc::UnboundedSender<ws::Message>>>>,
+    socket_threads: Vec<Option<thread::JoinHandle<()>>>,
     ids: Arc<AtomicU64>,
     pending: PendingRequests
 }
 
 impl Client {
-    pub fn new(host: &str) -> Result<Self, Error> {
-        let mut connections: Vec<Arc<RpcSocket>> = Vec::new();
-
+    pub fn new(host: &str, num_connections: u32) -> Result<Self, Error> {
         let requests = Arc::new(Mutex::new(FnvHashMap::default()));
 
-//        for _ in 0..1 {
-//            let rpc_socket = RpcSocket::new(host, requests.clone(), work_queue.stealer())?;
-//            connections.push(Arc::new(rpc_socket));
-//        }
-
-        let rpc_socket = RpcSocket::new(host, requests.clone())?;
-
-        Ok(Client {
-            socket: Arc::new(rpc_socket),
+        let mut client = Client {
+            host: host.to_string(),
+            sockets: Arc::new(Mutex::new(VecDeque::new())),
+            socket_threads: Vec::new(),
             ids: Arc::new(AtomicU64::new(0)),
             pending: requests
-        })
+        };
+
+        for _ in 0..num_connections {
+            client.start_connection()?;
+        }
+
+        Ok(client)
     }
 
-    pub fn next_id(&self) -> u64 {
-        self.ids.fetch_add(1, Ordering::Relaxed)
-    }
-
-    //Box<Future<Item=Result<Value, Error>, Error=Canceled>>
-    pub fn execute_request(&self, method: &str, params: Vec<Value>) -> FutureResult<Receiver<Result<Value, Error>>, Canceled>
-    {
+    pub fn execute_request(&self, method: &str, params: Vec<Value>) -> ClientResponse {
         let (tx, rx) = oneshot::channel();
 
         let id = self.next_id();
@@ -92,8 +83,80 @@ impl Client {
 
         trace!("Writing request to socket: {:?}", &request);
 
-        self.socket.send(ws::Message::Text(serialized_request)).unwrap();
-        Ok(rx).into_future()
+        ClientResponse::new(
+            id, self.send(ws::Message::Text(serialized_request)), rx
+        )
+    }
+
+    fn start_connection(&mut self) -> Result<(), Error> {
+        let (tx, rx) = mpsc::unbounded();
+        let worker = self.socket_worker(rx)?;
+        self.sockets.lock().push_back(tx);
+        self.socket_threads.push(Some(worker));
+        Ok(())
+    }
+
+    fn next_id(&self) -> u64 {
+        self.ids.fetch_add(1, Ordering::Relaxed)
+    }
+
+    fn send(&self, msg: ws::Message) -> Result<(), Error> {
+        let worker: mpsc::UnboundedSender<ws::Message> = self.sockets.lock().pop_front()
+            .ok_or::<Error>(ErrorKind::YumError("No sockets available".into()).into())?;
+
+        if let Err(e) = worker.unbounded_send(msg) {
+            error!("{:?}", e);
+        }
+
+        self.sockets.lock().push_back(worker);
+
+        Ok(())
+    }
+
+    fn socket_worker(&self, rx: mpsc::UnboundedReceiver<ws::Message>) -> Result<thread::JoinHandle<()>, Error> {
+        let host = self.host.to_string();
+        let pending = self.pending.clone();
+
+        let t_handle = thread::spawn(move || {
+            info!("Starting new socket worker");
+
+            let socket = RpcSocket::new(&host, pending);
+            let done = socket.into_future()
+                .and_then(move |rpc_socket| rx
+                    .map_err(|_| ErrorKind::YumError("Socket unreachable".into()).into())
+                    .fold(rpc_socket, |websocket, msg| {
+                        trace!("Writing request to socket: {:?}", &msg);
+                        websocket.send(msg).and_then(|_| Ok(websocket))
+                    })
+                    .and_then(|ws| ws.close())
+                );
+
+            current_thread::run(|_| {
+                current_thread::spawn(lazy(|| {
+                    done.and_then(|_| Ok(())).map_err(|e| error!("Socket worker: {:?}", e))
+                }))
+            });
+        });
+        Ok(t_handle)
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        trace!("Dropping client");
+        let mut socket_guard = self.sockets.lock();
+        for socket in socket_guard.iter_mut() {
+            socket.flush().and_then(|s| s.close()).wait()
+                .expect("Socket queue will flush");
+        }
+
+        for th in self.socket_threads.iter_mut() {
+            trace!("Dropping worker");
+            th.take()
+                .expect("Drop is called once")
+                .join()
+                .expect("Socket threads shut down cleanly");
+        }
     }
 }
 
@@ -112,6 +175,10 @@ impl RpcSocket {
             thread: Some(handle),
             pending: pending.clone()
         })
+    }
+
+    pub fn close(self) -> Result<(), Error> {
+        self.tx.close(ws::CloseCode::Normal).map_err(Into::into)
     }
 
     fn connect(host: &str, pending: PendingRequests) -> Result<(ws::Sender, thread::JoinHandle<()>), Error> {
@@ -178,6 +245,10 @@ impl ws::Handler for SocketConnection {
 
 impl Drop for RpcSocket {
     fn drop(&mut self) {
+        trace!("Closing socket");
+        self.tx.close(ws::CloseCode::Normal)
+            .expect("Socket closes without issue");
+
         self.thread
             .take()
             .expect("drop is only called once")
@@ -186,14 +257,64 @@ impl Drop for RpcSocket {
     }
 }
 
-//impl Drop for SocketConnection {
-//    fn drop(&mut self) {
-//        if let Err(e) = self.out.close(ws::CloseCode::Normal) {
-//            error!("Error on close: {:?}", e);
-//        }
-//    }
-//}
+enum MessageState {
+    InFlight(Option<Result<(), Error>>, oneshot::Receiver<Result<Value, Error>>),
+    Waiting(oneshot::Receiver<Result<Value, Error>>),
+    Complete
+}
 
+pub struct ClientResponse {
+    id: u64,
+    state: MessageState,
+}
+
+impl ClientResponse {
+    pub fn new(
+        id: u64,
+        send_status: Result<(), Error>,
+        rx: oneshot::Receiver<Result<Value, Error>>) -> Self
+    {
+        ClientResponse {
+            id,
+            state: MessageState::InFlight(Some(send_status), rx)
+        }
+    }
+}
+
+impl Future for ClientResponse {
+    type Item = Result<Value, Error>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            match self.state {
+                MessageState::InFlight(ref mut is_sent, _) => {
+                    trace!("Request enqueued (id: {})", self.id);
+                    if let Some(Err(e)) = is_sent.take() {
+                        return Err(e);
+                    }
+                },
+                MessageState::Waiting(ref mut rx) => {
+                    trace!("Waiting on response (id: {})", self.id);
+                    let result = try_ready!(rx.poll()
+                        .map_err(|_| Error::from(ErrorKind::Io(io::ErrorKind::TimedOut.into()))));
+                    trace!("Got result (id: {})", self.id);
+                    return Ok(result).map(Async::Ready)
+
+                }
+                MessageState::Complete => {
+                    return Err(ErrorKind::YumError("Couldn't complete request".into()).into())
+                }
+            }
+            let next_state = std::mem::replace(&mut self.state, MessageState::Complete);
+            self.state = if let MessageState::InFlight(_, rx) = next_state {
+                MessageState::Waiting(rx)
+            } else {
+                next_state
+            }
+        }
+    }
+}
 
 fn call_to_message(rpc_call: rpc::Call) -> ws::Message {
     let call = serde_json::to_string(&rpc_call)
@@ -201,25 +322,32 @@ fn call_to_message(rpc_call: rpc::Call) -> ws::Message {
     ws::Message::Text(call)
 }
 
+fn handle_message(msg: ws::Message) -> Result<Vec<RpcResponse>, Error> {
+    match msg {
+        ws::Message::Text(response) => handle_text_message(response),
+        ws::Message::Binary(response) => handle_binary_message(response)
+    }
+}
+
 fn handle_text_message(text: String) -> Result<Vec<RpcResponse>, Error> {
-    serde_json::from_str::<Response>(&text)
+    serde_json::from_str::<rpc::Response>(&text)
         .map_err(Into::into)
         .and_then(|resp| handle_response(resp))
 }
 
 fn handle_binary_message(binary: Vec<u8>) -> Result<Vec<RpcResponse>, Error> {
-    serde_json::from_slice::<Response>(&binary)
+    serde_json::from_slice::<rpc::Response>(&binary)
         .map_err(Into::into)
         .and_then(|resp| handle_response(resp))
 }
 
-fn handle_response(response: Response) -> Result<Vec<RpcResponse>, Error> {
-     match response {
-        Response::Single(output) => {
+fn handle_response(response: rpc::Response) -> Result<Vec<RpcResponse>, Error> {
+    match response {
+        rpc::Response::Single(output) => {
             let rpc_response = handle_output(output)?;
             Ok(vec![rpc_response])
         },
-        Response::Batch(vec_output) => {
+        rpc::Response::Batch(vec_output) => {
             handle_batch_output(vec_output)
                 .into_iter()
                 .collect::<Result<Vec<RpcResponse>, Error>>()

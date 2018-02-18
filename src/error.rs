@@ -8,7 +8,6 @@ use futures;
 use reqwest;
 use serde_json;
 use ws;
-use web3;
 
 error_chain! {
   foreign_links {
@@ -17,6 +16,7 @@ error_chain! {
     Futurs(futures::Canceled);
     Json(serde_json::Error);
     Http(reqwest::Error);
+    Mpsc(futures::sync::mpsc::SendError<ws::Message>);
     Ws(ws::Error);
   }
   errors {

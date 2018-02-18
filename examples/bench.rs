@@ -81,15 +81,15 @@ impl Ticker {
 fn main() {
     pretty_env_logger::init();
 
-    let requests = 5;
+    let requests = 1000000;
 
-    let (eloop, ipc) = web3::transports::Ipc::new("/root/.local/share/io.parity.ethereum/jsonrpc.ipc").unwrap();
-    bench_web3(" ipc", eloop, ipc, requests);
+//    let (eloop, ipc) = web3::transports::Ipc::new("/root/.local/share/io.parity.ethereum/jsonrpc.ipc").unwrap();
+//    bench_web3(" ipc", eloop, ipc, requests);
+//
+//    let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
+//    bench_web3("http", eloop, http, requests);
 
-    let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
-    bench_web3("http", eloop, http, requests);
-
-    let client = Client::new("ws://localhost:8546").unwrap();
+    let client = Client::new("ws://localhost:8546", 4).unwrap();
     bench_ey("websocket", &client, requests);
 
     std::process::exit(1);
@@ -120,21 +120,23 @@ fn bench_ey(id: &str, client: &Client, max: usize) {
 
     let ticker = Arc::new(Ticker::new(id));
 
-    for _ in 0..max {
+    let mut futs = Vec::new();
+    for n in 0..max {
         let ticker = ticker.clone();
         ticker.start();
 
         let block = client.execute_request("eth_blockNumber", vec![]).then(move |res| {
-            if let Err(e) = res {
+            if let &Err(ref e) = &res {
                 println!("{:?}", e);
             }
+
             ticker.tick();
             Ok(())
         });
 
-        if let Err(e) = pool.execute(block) {
-            println!("{:?}", e);
-        }
+        futs.push(pool.execute(block))
+
     }
     ticker.wait();
+    futures::future::join_all(futs).map(|_| println!("Done.")).wait();
 }

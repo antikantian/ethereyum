@@ -13,7 +13,9 @@ extern crate error_chain;
 #[macro_use]
 extern crate log;
 
+#[macro_use]
 extern crate futures;
+extern crate fixed_hash;
 extern crate ethereum_models;
 extern crate fnv;
 extern crate futures_cpupool;
