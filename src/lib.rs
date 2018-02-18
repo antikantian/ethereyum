@@ -1,5 +1,3 @@
-#![feature(integer_atomics)]
-
 extern crate crossbeam;
 
 #[macro_use]
