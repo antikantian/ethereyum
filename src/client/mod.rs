@@ -40,8 +40,6 @@ impl RpcResponse {
 
 type PendingRequests = Arc<Mutex<FnvHashMap<u64, oneshot::Sender<Result<Value, Error>>>>>;
 
-
-
 // Using Fowler-Noll-Vo hasher because we're using integer keys and I'm a loser.
 // See: http://cglab.ca/%7Eabeinges/blah/hash-rs/
 // This is probably insignificant since we're not expecting THAT many concurrent requests
@@ -73,15 +71,6 @@ impl Client {
         }
 
         Ok(client)
-    }
-
-    pub fn shutdown_all(&self) -> Result<(), Error> {
-        let mut guard = self.sockets.lock();
-        guard
-            .iter_mut()
-            .fold(Ok(()), |acc, sock| {
-                acc.and_then(|_| sock.stop())
-            })
     }
 
     pub fn execute_request(&self, method: &str, params: Vec<Value>) -> ClientResponse {
@@ -127,8 +116,7 @@ impl Client {
         let worker = self.sockets.lock().pop_front()
             .ok_or::<Error>(ErrorKind::YumError("No sockets available".into()).into())?;
 
-        let socket_msg = WorkerRequest::Message(msg);
-        let _: () = worker.send_request(socket_msg)?;
+        let _: () = worker.send_request(msg)?;
 
         self.sockets.lock().push_back(worker);
         Ok(())
@@ -146,15 +134,13 @@ impl Client {
     }
 }
 
-//impl Drop for Client {
-//    fn drop(&mut self) {
-//        trace!("Dropping client");
-//        let mut socket_guard = self.sockets.lock();
-//        for socket in socket_guard.iter_mut() {
-//            socket.stop().expect("Socket worker will close");
-//        }
-//    }
-//}
+impl Drop for Client {
+    fn drop(&mut self) {
+        trace!("Dropping client");
+        self.sockets.lock().clear();
+        self.pending.lock().clear();
+    }
+}
 
 pub enum WorkerRequest {
     Message(ws::Message),
@@ -163,270 +149,77 @@ pub enum WorkerRequest {
 }
 
 struct SocketWorker {
-    tx: mpsc::UnboundedSender<WorkerRequest>,
-    status: Arc<RpcSocketStatus>,
+    tx: ws::Sender,
+    is_closed: Arc<AtomicBool>,
+    is_shutdown: Arc<AtomicBool>,
     thread: Option<thread::JoinHandle<()>>
 }
 
 impl SocketWorker {
     pub fn new(id: u64, host: &str, pending: PendingRequests) -> Result<Self, Error> {
         trace!("Attempting to start new socket with id: {}, connecting to: {}", &id, &host);
-        let (worker_queue, worker_status, worker_thread) = SocketWorker::start(id, host, pending)?;
+        let (ws_tx, closed, shutdown, ws_thread) = SocketWorker::start(id, host, pending)?;
 
         Ok(SocketWorker {
-            tx: worker_queue,
-            status: worker_status,
-            thread: Some(worker_thread)
+            tx: ws_tx,
+            is_closed: closed,
+            is_shutdown: shutdown,
+            thread: Some(ws_thread)
         })
     }
 
     pub fn is_connected(&self) -> bool {
-        self.status.is_closed()
+        !self.is_closed.load(Ordering::Relaxed)
     }
 
-    pub fn send_request(&self, req: WorkerRequest) -> Result<(), Error> {
-        self.tx.unbounded_send(req).map_err(Into::into)
+    pub fn send_request(&self, req: ws::Message) -> Result<(), Error> {
+        self.tx.send(req).map_err(Into::into)
     }
 
     pub fn stop(&self) -> Result<(), Error> {
-        self.send_request(WorkerRequest::Shutdown)
+        if let Err(e) = self.tx.close(ws::CloseCode::Normal) {
+            error!("Couldn't close websocket: {:?}", e);
+        }
+        if let Err(e) = self.tx.shutdown() {
+            error!("Couldn't shutdown websocket: {:?}", e);
+        }
+        Ok(())
     }
 
     fn start(id: u64, host: &str, pending: PendingRequests)
-             -> Result<(mpsc::UnboundedSender<WorkerRequest>, Arc<RpcSocketStatus>, thread::JoinHandle<()>), Error>
+             -> Result<(
+                 ws::Sender, Arc<AtomicBool>, Arc<AtomicBool>, thread::JoinHandle<()>
+             ), Error>
     {
         let trace_id = format!("[socket-worker-{} -> {}]", &id, &host);
         trace!("{} starting up...", &trace_id);
+
         let host = host.to_string();
-        let thread_id = format!("yum-socket-worker-{}", id);
 
-        let (request_tx, request_rx) = sync::mpsc::channel();
-        let (status_tx, status_rx) = sync::mpsc::channel();
+        let closed_status = Arc::new(AtomicBool::new(true));
+        let shutdown_status = Arc::new(AtomicBool::new(true));
 
-        let t_handle = thread::Builder::new().name(thread_id.clone()).spawn(move || {
-            trace!("{} entering thread: {}", &trace_id.clone(), &thread_id.clone());
+        let (socket_sender, socket_thread) = SocketWorker::get_connection(
+            &host, pending.clone(), closed_status.clone(), shutdown_status.clone()
+        )?;
 
-            let pool = CpuPool::new(1);
-            let socket = Arc::new(RpcSocket::new(&host, pending).unwrap());
-            let socket_handle = socket.clone();
-            status_send.send(socket.get_status()).unwrap();
-            let done = Ok(socket_handle).into_future()
-                .and_then(move |rpc_socket| {
-                    trace!("{} Starting receive queue...", &thread_id);
-
-                    rx.map_err(|_| ErrorKind::YumError("Socket unreachable".into()).into())
-                        .fold(rpc_socket, |websocket, w_req| {
-                            match w_req {
-                                WorkerRequest::Message(msg) => {
-                                    trace!("Writing request to socket: {:?}", &msg);
-                                    websocket.send(msg).and_then(|_| Ok(websocket))
-                                },
-                                WorkerRequest::Close(code) => {
-                                    trace!("Closing websocket connection with code: {:?}", &code);
-                                    websocket.close_with(code).and_then(|_| Ok(websocket))
-                                },
-                                WorkerRequest::Shutdown => {
-                                    trace!("Shutting down websocket connection");
-                                    websocket.shutdown().and_then(|_| Ok(websocket))
-                                }
-                            }
-                        })
-                        .and_then(|ws| ws.shutdown())
-                });
-
-            pool.execute(done.and_then(|_| Ok(())).map_err(|e| error!("Socket worker: {:?}", e))).unwrap();
-        })?;
-        trace!("Attempting to receive rpc socket status");
-        let rpc_socket_status = status_recv.recv().unwrap();
-        Ok((tx, rpc_socket_status, t_handle))
+        Ok((socket_sender, closed_status, shutdown_status, socket_thread))
     }
 
-//    fn start(id: u64, host: &str, pending: PendingRequests)
-//        -> Result<(mpsc::UnboundedSender<WorkerRequest>, Arc<RpcSocketStatus>, thread::JoinHandle<()>), Error>
-//    {
-//        let trace_id = format!("[socket-worker-{} -> {}]", &id, &host);
-//        trace!("{} starting up...", &trace_id);
-//        let host = host.to_string();
-//        let thread_id = format!("yum-socket-worker-{}", id);
-//        let (tx, rx) = mpsc::unbounded();
-//        let (status_send, status_recv) = sync::mpsc::channel();
-//
-//        let t_handle = thread::Builder::new().name(thread_id.clone()).spawn(move || {
-//            trace!("{} entering thread: {}", &trace_id.clone(), &thread_id.clone());
-//
-//            let pool = CpuPool::new(1);
-//            let socket = Arc::new(RpcSocket::new(&host, pending).unwrap());
-//            let socket_handle = socket.clone();
-//            status_send.send(socket.get_status()).unwrap();
-//            let done = Ok(socket_handle).into_future()
-//                .and_then(move |rpc_socket| {
-//                    trace!("{} Starting receive queue...", &thread_id);
-//
-//                    rx.map_err(|_| ErrorKind::YumError("Socket unreachable".into()).into())
-//                        .fold(rpc_socket, |websocket, w_req| {
-//                            match w_req {
-//                                WorkerRequest::Message(msg) => {
-//                                    trace!("Writing request to socket: {:?}", &msg);
-//                                    websocket.send(msg).and_then(|_| Ok(websocket))
-//                                },
-//                                WorkerRequest::Close(code) => {
-//                                    trace!("Closing websocket connection with code: {:?}", &code);
-//                                    websocket.close_with(code).and_then(|_| Ok(websocket))
-//                                },
-//                                WorkerRequest::Shutdown => {
-//                                    trace!("Shutting down websocket connection");
-//                                    websocket.shutdown().and_then(|_| Ok(websocket))
-//                                }
-//                            }
-//                        })
-//                        .and_then(|ws| ws.shutdown())
-//                });
-//
-//            pool.execute(done.and_then(|_| Ok(())).map_err(|e| error!("Socket worker: {:?}", e))).unwrap();
-//
-
-//            thread::spawn(move || {
-//
-//
-//                let done = socket.into_future()
-//                    .and_then(move |rpc_socket| {
-//                        let status = rpc_socket.get_status();
-//                        status_send.send(status).expect("Couldn't send socket status");
-//                        trace!("{} Starting receive queue...", &thread_id);
-//
-//                        rx.map_err(|_| ErrorKind::YumError("Socket unreachable".into()).into())
-//                            .fold(rpc_socket, |websocket, w_req| {
-//                                match w_req {
-//                                    WorkerRequest::Message(msg) => {
-//                                        trace!("Writing request to socket: {:?}", &msg);
-//                                        websocket.send(msg).and_then(|_| Ok(websocket))
-//                                    },
-//                                    WorkerRequest::Close(code) => {
-//                                        trace!("Closing websocket connection with code: {:?}", &code);
-//                                        websocket.close_with(code).and_then(|_| Ok(websocket))
-//                                    },
-//                                    WorkerRequest::Shutdown => {
-//                                        trace!("Shutting down websocket connection");
-//                                        websocket.shutdown().and_then(|_| Ok(websocket))
-//                                    }
-//                                }
-//                            })
-//                            .and_then(|ws| ws.shutdown())
-//                    }).wait().unwrap();
-//            });
-            //pool.execute(done.and_then(|_| Ok(())).map_err(|e| error!("Socket worker: {:?}", e))).unwrap();
-
-//            current_thread::run(|_| {
-//                trace!("Running receive queue future");
-//                current_thread::spawn(lazy(|| {
-//                    done.and_then(|_| Ok(())).map_err(|e| error!("Socket worker: {:?}", e))
-//                }))
-//            });
-//        })?;
-//        trace!("Attempting to receive rpc socket status");
-//        let rpc_socket_status = status_recv.recv().unwrap();
-//        Ok((tx, rpc_socket_status, t_handle))
-//    }
-}
-
-//impl Drop for SocketWorker {
-//    fn drop(&mut self) {
-//        self.stop().expect("Socket stops properly");
-//        self.tx.close().expect("Socket queue closes properly");
-//        self.thread
-//            .take()
-//            .expect("Thread is only dropped once")
-//            .join()
-//            .expect("Socket thread shuts down properly");
-//    }
-//}
-
-#[derive(Debug)]
-struct RpcSocketStatus {
-    is_closed: Arc<AtomicBool>,
-    is_shutdown: Arc<AtomicBool>,
-}
-
-impl RpcSocketStatus {
-    pub fn new() -> Self {
-        RpcSocketStatus {
-            is_closed: Arc::new(AtomicBool::new(true)),
-            is_shutdown: Arc::new(AtomicBool::new(false))
-        }
-    }
-
-    pub fn is_closed(&self) -> bool {
-        self.is_closed.load(Ordering::Relaxed)
-    }
-
-    pub fn is_shutdown(&self) -> bool {
-        self.is_shutdown.load(Ordering::Relaxed)
-    }
-
-    pub fn set_closed(&self, status: bool) {
-        self.is_closed.store(status, Ordering::Relaxed)
-    }
-
-    pub fn set_shutdown(&self, status: bool) {
-        self.is_shutdown.store(status, Ordering::Relaxed)
-    }
-}
-
-struct RpcSocket {
-    tx: ws::Sender,
-    status: Arc<RpcSocketStatus>,
-    thread: Option<thread::JoinHandle<()>>,
-    pending: PendingRequests,
-}
-
-impl RpcSocket {
-    pub fn new(url: &str, pending: PendingRequests) -> Result<Self, Error> {
-        trace!("Attempting to get new rpc socket connection");
-        let (socket, socket_status, handle) = RpcSocket::connect(url, pending.clone())?;
-
-        Ok(RpcSocket {
-            tx: socket,
-            status: socket_status,
-            thread: Some(handle),
-            pending: pending.clone()
-        })
-    }
-
-    pub fn get_status(&self) -> Arc<RpcSocketStatus> {
-        self.status.clone()
-    }
-
-    pub fn close(&self) -> Result<(), Error> {
-        self.close_with(ws::CloseCode::Normal)
-    }
-
-    pub fn close_with(&self, code: ws::CloseCode) -> Result<(), Error> {
-        if self.status.is_closed() {
-            Ok(())
-        } else {
-            self.tx.close(code).map_err(Into::into)
-        }
-    }
-
-    pub fn shutdown(&self) -> Result<(), Error> {
-        if self.status.is_shutdown() {
-            Ok(())
-        } else {
-            self.tx.shutdown().map_err(Into::into)
-        }
-    }
-
-    fn connect(host: &str, pending: PendingRequests)
-        -> Result<(ws::Sender, Arc<RpcSocketStatus>, thread::JoinHandle<()>), Error>
+    fn get_connection(
+        host: &str,
+        pending: PendingRequests,
+        closed_status: Arc<AtomicBool>,
+        shutdown_status: Arc<AtomicBool>) -> Result<(ws::Sender, thread::JoinHandle<()>), Error>
     {
         trace!("connecting to host: {:?}", &host);
 
         let (tx, rx) = sync::mpsc::channel();
         let h = host.to_string();
-        let status = Arc::new(RpcSocketStatus::new());
-        let status_socket = status.clone();
 
-        let handle = thread::Builder::new().spawn(move || {
+        let c_status = closed_status.clone();
+
+        let ws_thread = thread::Builder::new().spawn(move || {
             trace!("entering actual websocket connection thread");
             ws::connect(h.clone(), |out| {
                 trace!("in ws-rs connection closure");
@@ -434,7 +227,8 @@ impl RpcSocket {
                 tx.send(out).unwrap();
 
                 SocketConnection {
-                    status: status_socket.clone(),
+                    is_closed: closed_status.clone(),
+                    is_shutdown: shutdown_status.clone(),
                     pending: pending.clone()
                 }
             }).expect(&format!("Couldn't connect to {}", &h));
@@ -450,7 +244,7 @@ impl RpcSocket {
                 return Err(ErrorKind::YumError(format!("Couldn't connect to host: {}", &host)).into());
             }
 
-            if status.is_closed() {
+            if c_status.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(100));
                 continue
             } else {
@@ -460,31 +254,45 @@ impl RpcSocket {
         }
 
         let socket_tx = rx.recv().expect("Couldn't get ws socket handle");
-        Ok((socket_tx, status, handle))
+        Ok((socket_tx, ws_thread))
     }
 
-    pub fn send(&self, msg: ws::Message) -> Result<(), Error> {
-        self.tx.send(msg).map_err(Into::into)
+
+}
+
+impl Drop for SocketWorker {
+    fn drop(&mut self) {
+        if let Err(e) = self.tx.shutdown() {
+            warn!("Error shutting down websocket: {:?}", e);
+        }
+
+        self.thread
+            .take()
+            .expect("Thread is only dropped once")
+            .join()
+            .expect("Socket thread shuts down properly");
     }
 }
 
 struct SocketConnection {
-    status: Arc<RpcSocketStatus>,
+    is_closed: Arc<AtomicBool>,
+    is_shutdown: Arc<AtomicBool>,
     pending: PendingRequests
 }
 
 impl ws::Handler for SocketConnection {
     fn on_open(&mut self, _: ws::Handshake) -> Result<(), ws::Error> {
-        self.status.set_closed(false);
+        self.is_shutdown.store(false, Ordering::Relaxed);
+        self.is_closed.store(false, Ordering::Relaxed);
         Ok(())
     }
 
     fn on_close(&mut self, _: ws::CloseCode, _: &str) {
-        self.status.set_closed(true);
+        self.is_closed.store(true, Ordering::Relaxed);
     }
 
     fn on_shutdown(&mut self) {
-        self.status.set_shutdown(true);
+        self.is_shutdown.store(true, Ordering::Relaxed);
     }
 
     fn on_message(&mut self, msg: ws::Message) -> Result<(), ws::Error> {
@@ -515,20 +323,6 @@ impl ws::Handler for SocketConnection {
             warn!("Couldn't decode response: {:?}", msg);
         }
         Ok(())
-    }
-}
-
-impl Drop for RpcSocket {
-    fn drop(&mut self) {
-        trace!("Closing socket");
-        self.shutdown()
-            .expect("Socket closes without issue");
-
-        self.thread
-            .take()
-            .expect("drop is only called once")
-            .join()
-            .expect("thread shuts down cleanly")
     }
 }
 

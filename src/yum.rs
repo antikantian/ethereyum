@@ -26,10 +26,6 @@ impl YumClient {
         Client::new(host, connections).map(|c| YumClient { client: c })
     }
 
-    pub fn close(&self) -> Result<(), Error> {
-        self.client.shutdown_all()
-    }
-
     pub fn accounts(&self) -> YumResult<Vec<H160>, Error> {
         self.client.execute_request("eth_accounts", Vec::new()).and_then(|result| {
             result.map(|v| {

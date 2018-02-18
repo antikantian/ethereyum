@@ -80,19 +80,31 @@ impl Ticker {
 fn main() {
     pretty_env_logger::init();
 
-    let home = env::home_dir().expect("Need home directory for IPC test");
-    let ipc_path = format!("{:?}/.local/share/io.parity.ethereum/jsonrpc.ipc", home);
-
     let requests = 1000000;
 
-    let (eloop, ipc) = web3::transports::Ipc::new(&ipc_path).unwrap();
-    bench_web3(" ipc", eloop, ipc, requests);
+    let (eloop, ipc) = web3::transports::Ipc::new("/root/.local/share/io.parity.ethereum/jsonrpc.ipc").unwrap();
+    bench_web3("rust-web3:ipc", eloop, ipc, requests);
 
     let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
-    bench_web3("http", eloop, http, requests);
+    bench_web3("rust-web3:http", eloop, http, requests);
 
-    let client = Client::new("ws://localhost:8546", 4).unwrap();
-    bench_ey("websocket", &client, requests);
+    let client_1conn = Client::new("ws://localhost:8546", 1).unwrap();
+    bench_ey("ethereyum:websocket:1-connection", &client_1conn, requests);
+
+    drop(client_1conn);
+
+    let client_2conn = Client::new("ws://localhost:8546", 2).unwrap();
+    bench_ey("ethereyum:websocket:2-connections", &client_2conn, requests);
+
+    drop(client_2conn);
+
+    let client_3conn = Client::new("ws://localhost:8546", 3).unwrap();
+    bench_ey("ethereyum:websocket:3-connections", &client_3conn, requests);
+
+    drop(client_3conn);
+
+    let client_4conn = Client::new("ws://localhost:8546", 4).unwrap();
+    bench_ey("ethereyum:websocket:4-connections", &client_4conn, requests);
 
     std::process::exit(1);
 }
@@ -140,5 +152,5 @@ fn bench_ey(id: &str, client: &Client, max: usize) {
 
     }
     ticker.wait();
-    futures::future::join_all(futs).map(|_| println!("Done.")).wait();
+    futures::future::join_all(futs).map(|_| ()).wait();
 }

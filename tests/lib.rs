@@ -88,43 +88,46 @@ mod yum_tests {
         assert_eq!(io.handle_request_sync(request), Some(response.to_owned()));
     }
 
-//    #[test]
-//    fn client_connects_then_shuts_down() {
-//        pretty_env_logger::init();
-//        let (socket, t) = setup_websocket(3102, "hello", Value::String("said hello".into()));
-//
-//        thread::sleep(Duration::from_millis(1000));
-//
-//        let mut client = YumClient::new("ws://127.0.0.1:3012", 1)
-//            .expect("Client connection required");
-//
-//        thread::sleep(Duration::from_millis(1000));
-//
-//        let client_shutdown = client.close();
-//
-//        assert!(client_shutdown.is_ok());
-//        assert!(socket.shutdown().is_ok());
-//        assert!(t.join().is_ok());
-//    }
+    #[test]
+    fn client_connects_then_shuts_down() {
+        //pretty_env_logger::init();
+        thread::sleep(Duration::from_millis(2000));
+
+        let (socket, t) = setup_websocket(3102, "hello", Value::String("said hello".into()));
+
+        thread::sleep(Duration::from_millis(2000));
+
+        let mut client = YumClient::new("ws://127.0.0.1:3102", 1)
+            .expect("Client connection required");
+
+        thread::sleep(Duration::from_millis(2000));
+
+        assert!(socket.shutdown().is_ok());
+        assert!(t.join().is_ok());
+    }
 
     #[test]
     fn gets_block_number() {
         pretty_env_logger::init();
+        thread::sleep(Duration::from_millis(2000));
 
         let block_number_hex = "0x4dfbff";
         let block_number_decimal = 5110783_u64;
         let (server, server_thread) = setup_websocket(
-            3102, "eth_blockNumber", Value::String(block_number_hex.into())
+            3103, "eth_blockNumber", Value::String(block_number_hex.into())
         );
 
-        thread::sleep(Duration::from_millis(1000));
+        thread::sleep(Duration::from_millis(2000));
 
-        let client = YumClient::new("ws://127.0.0.1:3102", 1).expect("Client must start");
+        let client = YumClient::new("ws://127.0.0.1:3103", 1).expect("Client must start");
+
+        thread::sleep(Duration::from_millis(2000));
 
         let block_op = client.block_number().wait().unwrap().expect("Must have block number");
 
+        thread::sleep(Duration::from_millis(2000));
+
         assert_eq!(block_op, block_number_decimal);
-        assert!(client.close().is_ok());
         assert!(server.shutdown().is_ok());
         assert!(server_thread.join().is_ok());
     }
