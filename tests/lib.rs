@@ -29,11 +29,12 @@ extern crate ws;
 
 #[cfg(test)]
 mod yum_tests {
+    use std::str::FromStr;
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
     use crossbeam_utils as crossbeam;
-    use ethereum_models::types::U256;
+    use ethereum_models::types::{H160, U256};
     use ethereyum::yum::{YumClient, YumResult};
     use futures::Future;
     use futures::future::lazy;
@@ -90,7 +91,6 @@ mod yum_tests {
 
     #[test]
     fn client_connects_then_shuts_down() {
-        //pretty_env_logger::init();
         thread::sleep(Duration::from_millis(2000));
 
         let (socket, t) = setup_websocket(3102, "hello", Value::String("said hello".into()));
@@ -108,7 +108,6 @@ mod yum_tests {
 
     #[test]
     fn gets_block_number() {
-        pretty_env_logger::init();
         thread::sleep(Duration::from_millis(2000));
 
         let block_number_hex = "0x4dfbff";
@@ -128,6 +127,32 @@ mod yum_tests {
         thread::sleep(Duration::from_millis(2000));
 
         assert_eq!(block_op, block_number_decimal);
+        assert!(server.shutdown().is_ok());
+        assert!(server_thread.join().is_ok());
+    }
+
+    #[test]
+    fn gets_accounts() {
+        thread::sleep(Duration::from_millis(2000));
+
+        let eth_account = "0000000000000000000000000000000000000000";
+        let eth_as_h160 = H160::from_str("0000000000000000000000000000000000000000").unwrap();
+        let response = serde_json::to_value(vec)
+        let (server, server_thread) = setup_websocket(
+            3104, "eth_accounts", vec![Value::String(eth_account.into())])
+        );
+
+        thread::sleep(Duration::from_millis(2000));
+
+        let client = YumClient::new("ws://127.0.0.1:3104", 1).expect("Client must start");
+
+        thread::sleep(Duration::from_millis(2000));
+
+        let account_op = client.accounts().wait().unwrap().expect("Must have a response");
+
+        thread::sleep(Duration::from_millis(2000));
+
+        assert_eq!(format!("{:?}", account_op), format!("{:?}", eth_as_h160));
         assert!(server.shutdown().is_ok());
         assert!(server_thread.join().is_ok());
     }
