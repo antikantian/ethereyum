@@ -350,6 +350,8 @@ impl ClientResponse {
     }
 }
 
+// This is based on code from the rust-web3 library:
+// https://github.com/tomusdrw/rust-web3/blob/master/src/transports/shared.rs
 impl Future for ClientResponse {
     type Item = Result<Value, Error>;
     type Error = Error;
