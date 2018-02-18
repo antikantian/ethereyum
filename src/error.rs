@@ -9,6 +9,8 @@ use reqwest;
 use serde_json;
 use ws;
 
+use client::WorkerRequest;
+
 error_chain! {
   foreign_links {
     Crossbeam(crossbeam_channel::RecvError);
@@ -17,6 +19,7 @@ error_chain! {
     Json(serde_json::Error);
     Http(reqwest::Error);
     Mpsc(futures::sync::mpsc::SendError<ws::Message>);
+    SocketWorker(futures::sync::mpsc::SendError<WorkerRequest>);
     Ws(ws::Error);
   }
   errors {

@@ -37,9 +37,5 @@ pub mod address;
 pub mod client;
 pub mod error;
 pub mod yum;
-pub mod web3;
 
 pub use self::error::{Error, ErrorKind};
-
-pub type FutureResult<T, E> = Box<futures::future::Future<Item=T, Error=E> + Send + 'static>;
-

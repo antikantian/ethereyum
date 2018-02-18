@@ -8,7 +8,7 @@ extern crate tokio;
 extern crate futures_cpupool;
 extern crate web3;
 
-use std::{thread, time};
+use std::{env, thread, time};
 use std::sync::{atomic, Arc};
 
 use futures::future::lazy;
@@ -23,6 +23,9 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use futures_cpupool::CpuPool;
 use futures::future::Executor;
+
+// Benchmark code comes from the rust-web3 library:
+// https://github.com/tomusdrw/rust-web3/blob/master/examples/bench.rs
 
 fn as_millis(dur: time::Duration) -> f64 {
     dur.as_secs() as f64 * 1_000.0 + dur.subsec_nanos() as f64 / 1_000_000.0
@@ -52,10 +55,6 @@ impl Ticker {
     pub fn tick(&self) {
         let reqs = self.reqs.fetch_add(1, atomic::Ordering::AcqRel) as u64;
         self.started.fetch_sub(1, atomic::Ordering::AcqRel);
-
-//        if reqs >= 100_000 {
-//            self.print_result(reqs);
-//        }
     }
 
     pub fn print_result(&self, reqs: u64) {
@@ -81,13 +80,16 @@ impl Ticker {
 fn main() {
     pretty_env_logger::init();
 
+    let home = env::home_dir().expect("Need home directory for IPC test");
+    let ipc_path = format!("{:?}/.local/share/io.parity.ethereum/jsonrpc.ipc", home);
+
     let requests = 1000000;
 
-//    let (eloop, ipc) = web3::transports::Ipc::new("/root/.local/share/io.parity.ethereum/jsonrpc.ipc").unwrap();
-//    bench_web3(" ipc", eloop, ipc, requests);
-//
-//    let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
-//    bench_web3("http", eloop, http, requests);
+    let (eloop, ipc) = web3::transports::Ipc::new(&ipc_path).unwrap();
+    bench_web3(" ipc", eloop, ipc, requests);
+
+    let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
+    bench_web3("http", eloop, http, requests);
 
     let client = Client::new("ws://localhost:8546", 4).unwrap();
     bench_ey("websocket", &client, requests);
