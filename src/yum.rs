@@ -84,6 +84,16 @@ impl YumClient {
                 })
             })
     }
+
+    pub fn get_block_by_number(&self, block: u64, with_tx: bool) -> YumResult<Option<Block>, Error> {
+        self.client.execute_request("eth_getBlockByHash", vec![ser(&BlockNumber::Number(block)), ser(&with_tx)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<Option<Block>>(v).map_err(Into::into)
+                })
+            })
+    }
+
 }
 
 fn ser<T: Serialize>(t: &T) -> Value {
