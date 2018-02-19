@@ -5,7 +5,6 @@ use std::io;
 
 use crossbeam_channel;
 use futures;
-use reqwest;
 use serde_json;
 use ws;
 
@@ -17,7 +16,6 @@ error_chain! {
     Io(io::Error);
     Futurs(futures::Canceled);
     Json(serde_json::Error);
-    Http(reqwest::Error);
     Mpsc(futures::sync::mpsc::SendError<ws::Message>);
     SocketWorker(futures::sync::mpsc::SendError<WorkerRequest>);
     Ws(ws::Error);

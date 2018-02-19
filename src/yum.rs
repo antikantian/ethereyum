@@ -34,6 +34,17 @@ impl YumClient {
         })
     }
 
+    pub fn address_is_contract(&self, address: &H160, block: &BlockNumber) -> YumResult<bool, Error> {
+        self.client.execute_request("eth_getCode", vec![ser(&address), ser(&block)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<String>(v)
+                        .map_err(Into::into)
+                        .map(|code| code.len() > 2)
+                })
+            })
+    }
+
     pub fn block_number(&self) -> YumResult<u64, Error> {
         self.client.execute_request("eth_blockNumber", Vec::new()).and_then(|result| {
             result.map(|v| {
@@ -51,7 +62,7 @@ impl YumClient {
         })
     }
 
-    pub fn estimate_gas(&self, call: TransactionCall) -> YumResult<U256, Error> {
+    pub fn estimate_gas(&self, call: &TransactionCall) -> YumResult<U256, Error> {
         self.client.execute_request("eth_estimateGas", vec![ser(&call)]).and_then(|result| {
             result.map(|v| {
                 serde_json::from_value::<U256>(v).map_err(Into::into)
@@ -67,7 +78,7 @@ impl YumClient {
         })
     }
 
-    pub fn get_balance(&self, addr: H160, num: BlockNumber) -> YumResult<U256, Error> {
+    pub fn get_balance(&self, addr: &H160, num: &BlockNumber) -> YumResult<U256, Error> {
         self.client.execute_request("eth_getBalance", vec![ser(&addr), ser(&num)])
             .and_then(|result| {
                 result.map(|v| {
@@ -76,7 +87,7 @@ impl YumClient {
             })
     }
 
-    pub fn get_block_by_hash(&self, block: H256, with_tx: bool) -> YumResult<Option<Block>, Error> {
+    pub fn get_block_by_hash(&self, block: &H256, with_tx: bool) -> YumResult<Option<Block>, Error> {
         self.client.execute_request("eth_getBlockByHash", vec![ser(&block), ser(&with_tx)])
             .and_then(|result| {
                 result.map(|v| {
@@ -86,7 +97,9 @@ impl YumClient {
     }
 
     pub fn get_block_by_number(&self, block: u64, with_tx: bool) -> YumResult<Option<Block>, Error> {
-        self.client.execute_request("eth_getBlockByHash", vec![ser(&BlockNumber::Number(block)), ser(&with_tx)])
+        self.client.execute_request(
+            "eth_getBlockByHash", vec![ser(&BlockNumber::Number(block)), ser(&with_tx)]
+        )
             .and_then(|result| {
                 result.map(|v| {
                     serde_json::from_value::<Option<Block>>(v).map_err(Into::into)
@@ -94,8 +107,84 @@ impl YumClient {
             })
     }
 
+    pub fn get_code(&self, address: &H160, block: &BlockNumber) -> YumResult<String, Error> {
+        self.client.execute_request("eth_getCode", vec![ser(&address), ser(&block)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<String>(v).map_err(Into::into)
+                })
+            })
+    }
+
+    pub fn get_transaction(&self, tx_hash: &H256) -> YumResult<Option<Transaction>, Error> {
+        self.client.execute_request("eth_getTransactionByHash", vec![ser(&tx_hash)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<Option<Transaction>>(v).map_err(Into::into)
+                })
+            })
+    }
+
+    pub fn get_transaction_receipt(&self, tx_hash: &H256)
+        -> YumResult<Option<TransactionReceipt>, Error>
+    {
+        self.client.execute_request("eth_getTransactionReceipt", vec![ser(&tx_hash)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<Option<TransactionReceipt>>(v).map_err(Into::into)
+                })
+            })
+    }
+
+    pub fn get_num_transactions_sent(&self, address: &H160, block: &BlockNumber)
+        -> YumResult<u64, Error>
+    {
+        self.client.execute_request("eth_getTransactionCount", vec![ser(&address), ser(&block)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<U256>(v)
+                        .map_err(Into::into)
+                        .map(|n| n.low_u64())
+                })
+            })
+    }
+
+
+
 }
 
 fn ser<T: Serialize>(t: &T) -> Value {
     serde_json::to_value(&t).expect("Serialize is serializable")
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

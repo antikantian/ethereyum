@@ -18,7 +18,6 @@ extern crate fnv;
 extern crate futures_cpupool;
 extern crate jsonrpc_core as rpc;
 extern crate parking_lot;
-extern crate reqwest;
 extern crate serde;
 extern crate tokio;
 extern crate url;

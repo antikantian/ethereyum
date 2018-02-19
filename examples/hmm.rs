@@ -24,7 +24,7 @@ fn main() {
 
     let d = client.gas_price().map(|x| println!("Gas price: {:?}", x)).wait();
 
-    let e = client.get_balance(H160::from_str("8d12A197cB00D4747a1fe03395095ce2A5CC6819").unwrap(), BlockNumber::Name("latest"))
+    let e = client.get_balance(&H160::from_str("8d12A197cB00D4747a1fe03395095ce2A5CC6819").unwrap(), &BlockNumber::Name("latest"))
         .map(|x| println!("Balance: {:?}", x)).wait();
 
 //    let f = client.get_block_by_hash(H256::from_str("0946d10c54cce1202bb11297f750a713cc3929d66de1ceb3aae75777abdcdbdb").unwrap(), true)

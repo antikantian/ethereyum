@@ -34,11 +34,13 @@ mod yum_tests {
     use std::thread;
     use std::time::Duration;
     use crossbeam_utils as crossbeam;
+    use ethereum_models::objects::BlockNumber;
     use ethereum_models::types::{H160, U256};
     use ethereyum::yum::{YumClient, YumResult};
     use futures::Future;
     use futures::future::lazy;
     use jsonrpc_core::*;
+    use jsonrpc_core::Params;
     use pretty_env_logger;
     use serde_json::{self, Value};
     use tokio::executor::current_thread;
@@ -156,6 +158,38 @@ mod yum_tests {
         assert!(server.shutdown().is_ok());
         assert!(server_thread.join().is_ok());
     }
+
+    #[test]
+    fn gets_code_at_address() {
+        thread::sleep(Duration::from_millis(2000));
+
+        let dummy_address = H160::from_str("a94f5374fce5edbc8e2a8697c15331677e6ebf0b").unwrap();
+        let dummy_block = BlockNumber::Name("latest");
+        let contract_code = "0x600160008035811a818181146012578301005b601b6001356025565b8060005260206000f25b600060078202905091905056";
+        let (server, server_thread) = setup_websocket(
+            3105, "eth_getCode", Value::String(contract_code.into())
+        );
+
+        thread::sleep(Duration::from_millis(2000));
+
+        let client = YumClient::new("ws://127.0.0.1:3105", 1).expect("Client must start");
+
+        thread::sleep(Duration::from_millis(2000));
+
+        let code_op = client.get_code(&dummy_address, &dummy_block)
+            .wait()
+            .unwrap()
+            .expect("Must have a response");
+
+        thread::sleep(Duration::from_millis(2000));
+
+        assert_eq!(code_op, contract_code);
+        assert!(server.shutdown().is_ok());
+        assert!(server_thread.join().is_ok());
+    }
+
+
+
 }
 
 
