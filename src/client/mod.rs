@@ -10,6 +10,7 @@ use std::convert::From;
 
 use fnv::FnvHashMap;
 use futures::{Async, Poll, future, Future};
+use futures::future::join_all;
 use futures::sync::oneshot;
 use parking_lot::Mutex;
 use rpc::{self, Output};
@@ -71,9 +72,11 @@ impl Client {
     }
 
     pub fn request<T>(
-        &self, method:
-        &str, params: Vec<Value>,
-        de: fn(Value) -> Result<T, Error>) -> YumFuture<T> {
+        &self,
+        method: &str,
+        params: Vec<Value>,
+        de: fn(Value) -> Result<T, Error>) -> YumFuture<T>
+    {
         let (tx, rx) = oneshot::channel();
 
         let id = self.next_id();

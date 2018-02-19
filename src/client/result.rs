@@ -3,10 +3,12 @@ use std::marker::PhantomData;
 use std::mem;
 
 use futures::{Async, Future, Poll};
+use futures::future::JoinAll;
 use futures::sync::oneshot;
 use serde::de::DeserializeOwned;
 use serde_json::{self, Value};
 
+use error;
 use error::Error;
 
 pub enum YumFuture<T> {

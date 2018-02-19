@@ -125,7 +125,6 @@ impl YumClient {
         )
     }
 
-
 }
 
 pub fn ser<T: Serialize>(t: &T) -> Value {
