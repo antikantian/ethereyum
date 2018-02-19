@@ -28,3 +28,8 @@ ws = "0.7.3"
 crossbeam-utils = "0.2"
 jsonrpc-ws-server = { version = "8.0", git = "https://github.com/paritytech/jsonrpc.git" }
 web3 = { version = "0.2.0", git = "https://github.com/tomusdrw/rust-web3.git" }
+
+[features]
+default = ["parity"]
+
+parity = []

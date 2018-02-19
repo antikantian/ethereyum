@@ -34,7 +34,9 @@ impl YumClient {
         })
     }
 
-    pub fn address_is_contract(&self, address: &H160, block: &BlockNumber) -> YumResult<bool, Error> {
+    pub fn address_is_contract(&self, address: &H160, block: &BlockNumber)
+        -> YumResult<bool, Error>
+    {
         self.client.execute_request("eth_getCode", vec![ser(&address), ser(&block)])
             .and_then(|result| {
                 result.map(|v| {
@@ -87,7 +89,9 @@ impl YumClient {
             })
     }
 
-    pub fn get_block_by_hash(&self, block: &H256, with_tx: bool) -> YumResult<Option<Block>, Error> {
+    pub fn get_block_by_hash(&self, block: &H256, with_tx: bool)
+        -> YumResult<Option<Block>, Error>
+    {
         self.client.execute_request("eth_getBlockByHash", vec![ser(&block), ser(&with_tx)])
             .and_then(|result| {
                 result.map(|v| {
@@ -96,7 +100,9 @@ impl YumClient {
             })
     }
 
-    pub fn get_block_by_number(&self, block: u64, with_tx: bool) -> YumResult<Option<Block>, Error> {
+    pub fn get_block_by_number(&self, block: u64, with_tx: bool)
+        -> YumResult<Option<Block>, Error>
+    {
         self.client.execute_request(
             "eth_getBlockByHash", vec![ser(&BlockNumber::Number(block)), ser(&with_tx)]
         )
@@ -149,6 +155,16 @@ impl YumClient {
             })
     }
 
+    #[cfg(feature = "parity")]
+    pub fn trace_transaction(&self, tx_hash: &H256) -> YumResult<Vec<ParityTrace>, Error> {
+        self.client.execute_request("trace_transaction", vec![ser(&tx_hash)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<Vec<ParityTrace>>(v)
+                        .map_err(Into::into)
+                })
+            })
+    }
 
 
 }
@@ -156,35 +172,3 @@ impl YumClient {
 fn ser<T: Serialize>(t: &T) -> Value {
     serde_json::to_value(&t).expect("Serialize is serializable")
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

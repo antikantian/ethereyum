@@ -241,7 +241,9 @@ impl SocketWorker {
 
             // 5 secs
             if iter_count > 50 {
-                return Err(ErrorKind::YumError(format!("Couldn't connect to host: {}", &host)).into());
+                return Err(
+                    ErrorKind::YumError(format!("Couldn't connect to host: {}", &host)).into()
+                );
             }
 
             if c_status.load(Ordering::Relaxed) {
@@ -424,7 +426,6 @@ fn handle_response(response: rpc::Response) -> Result<Vec<RpcResponse>, Error> {
                 .collect::<Result<Vec<RpcResponse>, Error>>()
         }
     }
-
 }
 
 fn handle_batch_output(output: Vec<Output>) -> Vec<Result<RpcResponse, Error>> {
