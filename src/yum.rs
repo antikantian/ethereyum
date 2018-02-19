@@ -1,4 +1,5 @@
 use std::u64;
+use std::collections::HashMap;
 
 use ethereum_models::objects::*;
 use ethereum_models::types::{H160, H256, U256};
@@ -122,6 +123,33 @@ impl YumClient {
             })
     }
 
+    pub fn get_logs(&self, from: &BlockNumber, to: &BlockNumber, address: &H160, topic: &H256)
+        -> YumResult<Vec<Log>, Error>
+    {
+        let mut params = HashMap::new();
+        params.insert("topics".to_string(), vec![address.clone()]);
+
+        self.client.execute_request("eth_getLogs", vec![ser(&params)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<Vec<Log>>(v).map_err(Into::into)
+                })
+            })
+    }
+
+    pub fn get_num_transactions_sent(&self, address: &H160, block: &BlockNumber)
+                                     -> YumResult<u64, Error>
+    {
+        self.client.execute_request("eth_getTransactionCount", vec![ser(&address), ser(&block)])
+            .and_then(|result| {
+                result.map(|v| {
+                    serde_json::from_value::<U256>(v)
+                        .map_err(Into::into)
+                        .map(|n| n.low_u64())
+                })
+            })
+    }
+
     pub fn get_transaction(&self, tx_hash: &H256) -> YumResult<Option<Transaction>, Error> {
         self.client.execute_request("eth_getTransactionByHash", vec![ser(&tx_hash)])
             .and_then(|result| {
@@ -138,19 +166,6 @@ impl YumClient {
             .and_then(|result| {
                 result.map(|v| {
                     serde_json::from_value::<Option<TransactionReceipt>>(v).map_err(Into::into)
-                })
-            })
-    }
-
-    pub fn get_num_transactions_sent(&self, address: &H160, block: &BlockNumber)
-        -> YumResult<u64, Error>
-    {
-        self.client.execute_request("eth_getTransactionCount", vec![ser(&address), ser(&block)])
-            .and_then(|result| {
-                result.map(|v| {
-                    serde_json::from_value::<U256>(v)
-                        .map_err(Into::into)
-                        .map(|n| n.low_u64())
                 })
             })
     }
