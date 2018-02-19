@@ -21,6 +21,10 @@ error_chain! {
     Ws(ws::Error);
   }
   errors {
+    BatchRequestError {
+        description("batch error"),
+        display("error sending batch request")
+    }
     RpcError(e: String) {
         description("rpc errpr"),
         display("RPC error: {}", e)

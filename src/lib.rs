@@ -16,6 +16,8 @@ extern crate fixed_hash;
 extern crate ethereum_models;
 extern crate fnv;
 extern crate futures_cpupool;
+#[macro_use]
+extern crate itertools;
 extern crate jsonrpc_core as rpc;
 extern crate parking_lot;
 extern crate serde;
@@ -34,4 +36,5 @@ pub mod client;
 pub mod error;
 pub mod yum;
 
+pub use self::client::YumFuture;
 pub use self::error::{Error, ErrorKind};

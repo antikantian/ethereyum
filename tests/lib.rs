@@ -124,7 +124,7 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        let block_op = client.block_number().wait().unwrap().expect("Must have block number");
+        let block_op = client.block_number().wait().unwrap();
 
         thread::sleep(Duration::from_millis(2000));
 
@@ -150,7 +150,7 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        let account_op = client.accounts().wait().unwrap().expect("Must have a response");
+        let account_op = client.accounts().wait().unwrap();
 
         thread::sleep(Duration::from_millis(2000));
 
@@ -178,8 +178,7 @@ mod yum_tests {
 
         let code_op = client.get_code(&dummy_address, &dummy_block)
             .wait()
-            .unwrap()
-            .expect("Must have a response");
+            .unwrap();
 
         thread::sleep(Duration::from_millis(2000));
 

@@ -1,27 +1,24 @@
-use std::collections::VecDeque;
+mod result;
+
+use std::collections::{HashMap, VecDeque};
 use std::{self, io};
-use std::marker::PhantomData;
 use std::sync::{self, Arc};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 use std::convert::From;
 
-use futures::future::IntoFuture;
-use futures_cpupool::CpuPool;
-use futures::future::Executor;
 use fnv::FnvHashMap;
-use futures::{Async, Poll, Future, Stream, Sink};
-use futures::sync::{oneshot, mpsc};
+use futures::{Async, Poll, future, Future};
+use futures::sync::oneshot;
 use parking_lot::Mutex;
 use rpc::{self, Output};
-use serde::ser::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::{self, Value};
 use ws;
-use futures::future::lazy;
-use tokio::executor::current_thread;
 
 use error::{Error, ErrorKind};
+pub use self::result::YumFuture;
 
 #[derive(Debug)]
 pub enum RpcResponse {
@@ -73,6 +70,28 @@ impl Client {
         Ok(client)
     }
 
+    pub fn request<T>(
+        &self, method:
+        &str, params: Vec<Value>,
+        de: fn(Value) -> Result<T, Error>) -> YumFuture<T> {
+        let (tx, rx) = oneshot::channel();
+
+        let id = self.next_id();
+        let request = build_request(id, &method, params);
+
+        self.pending.lock().insert(id, tx);
+
+        let serialized_request = serde_json::to_string(&request)
+            .expect("Serialization never fails");
+
+        trace!("Writing request to socket: {:?}", &request);
+
+        if let Err(_) = self.send(ws::Message::Text(serialized_request)) {
+            return YumFuture::Error(ErrorKind::YumError("Couldn't send request".into()).into());
+        }
+        YumFuture::Waiting(rx, de)
+    }
+
     pub fn execute_request(&self, method: &str, params: Vec<Value>) -> ClientResponse {
         let (tx, rx) = oneshot::channel();
 
@@ -89,6 +108,43 @@ impl Client {
         ClientResponse::new(
             id, self.send(ws::Message::Text(serialized_request)), rx
         )
+    }
+
+    pub fn execute_batch(&self, requests: Vec<(String, Vec<Value>)>) -> Vec<ClientResponse> {
+        let mut guard = self.pending.lock();
+        let mut calls = Vec::new();
+        let mut responses = Vec::new();
+
+        for (method, params) in requests {
+            let (tx, rx) = oneshot::channel();
+            let id = self.next_id();
+            let request = build_request(id, &method, params);
+
+            calls.push(request);
+            guard.insert(id, tx);
+            responses.push((id, rx));
+        }
+        guard.unlock_fair();
+
+        let batch_call = rpc::request::Request::Batch(calls);
+        let serialized_batch_calls = serde_json::to_string(&batch_call)
+            .expect("Serialization never fails");
+
+        trace!("Writing batch request to socket: {:?}", &serialized_batch_calls);
+
+        let send_status = &self.send(ws::Message::Text(serialized_batch_calls));
+        let get_status = || {
+            if send_status.is_ok() {
+                Ok(())
+            } else {
+                Err(ErrorKind::BatchRequestError.into())
+            }
+        };
+
+        responses
+            .into_iter()
+            .map(|(id, rx)| ClientResponse::new(id, get_status(), rx))
+            .collect::<Vec<ClientResponse>>()
     }
 
     fn start_connection(&mut self) -> Result<(), Error> {
