@@ -93,8 +93,10 @@ impl Client {
 
         trace!("Writing request to socket: {:?}", &request);
 
-        if let Err(_) = self.send(ws::Message::Text(serialized_request)) {
-            return YumFuture::Error(ErrorKind::YumError("Couldn't send request".into()).into());
+        if let Err(_) = self.send(ws::Message::Text(serialized_request.clone())) {
+            return YumFuture::Error(ErrorKind::YumError(
+                format!("Couldn't send request: {}", serialized_request)
+            ).into());
         }
         YumFuture::Waiting(rx, de)
     }
