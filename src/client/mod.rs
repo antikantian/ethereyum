@@ -71,7 +71,7 @@ impl Client {
         Ok(client)
     }
 
-    pub fn request<T>(
+    pub fn request<T: DeserializeOwned>(
         &self,
         method: &str,
         params: Vec<Value>,
@@ -95,9 +95,9 @@ impl Client {
         YumFuture::Waiting(rx, de)
     }
 
-    pub fn batch_request<T: DeserializeOwned>(
+    pub fn batch_request<T: DeserializeOwned + Send + Sync + 'static>(
         &self,
-        requests: Vec<(&str, Vec<Value>, Box<Fn(Value) -> Result<T, Error>>)>)
+        requests: Vec<(&str, Vec<Value>, Box<Fn(Value) -> Result<T, Error> + Send + Sync>)>)
         -> YumBatchFuture<T>
     {
         let mut guard = self.pending.lock();
@@ -111,7 +111,7 @@ impl Client {
 
             calls.push(request);
             guard.insert(id, tx);
-            responses.push((rx, de));
+            responses.push((rx, Arc::new(de)));
         }
         guard.unlock_fair();
 

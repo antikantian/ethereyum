@@ -13,7 +13,7 @@ use std::sync::{atomic, Arc};
 
 use futures::future::lazy;
 use ethereum_models::types::U256;
-use ethereyum::client::Client;
+use ethereyum::yum::YumClient;
 use ethereyum::Error;
 use futures::future::Future;
 use futures::IntoFuture;
@@ -88,22 +88,22 @@ fn main() {
     let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
     bench_web3("rust-web3:http", eloop, http, requests);
 
-    let client_1conn = Client::new("ws://localhost:8546", 1).unwrap();
+    let client_1conn = YumClient::new("ws://localhost:8546", 1).unwrap();
     bench_ey("ethereyum:websocket:1-connection", &client_1conn, requests);
 
     drop(client_1conn);
 
-    let client_2conn = Client::new("ws://localhost:8546", 2).unwrap();
+    let client_2conn = YumClient::new("ws://localhost:8546", 2).unwrap();
     bench_ey("ethereyum:websocket:2-connections", &client_2conn, requests);
 
     drop(client_2conn);
 
-    let client_3conn = Client::new("ws://localhost:8546", 3).unwrap();
+    let client_3conn = YumClient::new("ws://localhost:8546", 3).unwrap();
     bench_ey("ethereyum:websocket:3-connections", &client_3conn, requests);
 
     drop(client_3conn);
 
-    let client_4conn = Client::new("ws://localhost:8546", 4).unwrap();
+    let client_4conn = YumClient::new("ws://localhost:8546", 4).unwrap();
     bench_ey("ethereyum:websocket:4-connections", &client_4conn, requests);
 
     std::process::exit(1);
@@ -129,7 +129,7 @@ fn bench_web3<T: web3::Transport>(id: &str, eloop: web3::transports::EventLoopHa
     ticker.wait()
 }
 
-fn bench_ey(id: &str, client: &Client, max: usize) {
+fn bench_ey(id: &str, client: &YumClient, max: usize) {
     let pool = CpuPool::new_num_cpus();
 
     let ticker = Arc::new(Ticker::new(id));
@@ -139,11 +139,10 @@ fn bench_ey(id: &str, client: &Client, max: usize) {
         let ticker = ticker.clone();
         ticker.start();
 
-        let block = client.execute_request("eth_blockNumber", vec![]).then(move |res| {
+        let block = client.block_number().then(move |res| {
             if let &Err(ref e) = &res {
                 println!("{:?}", e);
             }
-
             ticker.tick();
             Ok(())
         });

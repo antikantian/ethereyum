@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::mem;
+use std::sync::Arc;
 
 use futures::{Async, Future, Poll};
 use futures::future::{JoinAll, join_all};
@@ -13,13 +14,13 @@ use error::Error;
 
 pub enum YumFuture<T> {
     Waiting(oneshot::Receiver<Result<Value, Error>>, fn(Value) -> Result<T, Error>),
-    WaitingFn(oneshot::Receiver<Result<Value, Error>>, Box<Fn(Value) -> Result<T, Error>>),
+    WaitingFn(oneshot::Receiver<Result<Value, Error>>, Arc<Box<Fn(Value) -> Result<T, Error> + Send + Sync>>),
     Complete,
     Error(Error)
 }
 
 impl<T> Future for YumFuture<T>
-    where T: DeserializeOwned
+    where T: DeserializeOwned + Send + Sync + 'static
 
 {
     type Item = T;
@@ -70,14 +71,14 @@ impl<T> Future for YumFuture<T>
     }
 }
 
-pub enum YumBatchFuture<T: DeserializeOwned> {
+pub enum YumBatchFuture<T: DeserializeOwned + Send + Sync + 'static> {
     Waiting(JoinAll<Vec<YumFuture<T>>>),
     Complete,
     Error(Error)
 }
 
 impl<T> Future for YumBatchFuture<T>
-    where T: DeserializeOwned
+    where T: DeserializeOwned + Send + Sync + 'static
 {
     type Item = Vec<T>;
     type Error = Error;
@@ -103,14 +104,15 @@ impl<T> Future for YumBatchFuture<T>
     }
 }
 
-pub enum YumBatchFutureT<T: DeserializeOwned, U> {
-    Waiting(YumBatchFuture<T>, Box<Fn(Vec<T>) -> U>),
+pub enum YumBatchFutureT<T: DeserializeOwned + Send + Sync + 'static, U> {
+    Waiting(YumBatchFuture<T>, Arc<Box<Fn(Vec<T>) -> U + Send + Sync>>),
     Complete,
     Error(Error)
 }
 
 impl<T, U> Future for YumBatchFutureT<T, U>
-    where T: DeserializeOwned
+    where T: DeserializeOwned + Send + Sync + 'static,
+          U: Send + Sync + 'static
 {
     type Item = U;
     type Error = Error;

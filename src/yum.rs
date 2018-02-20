@@ -11,7 +11,7 @@ use serde_json::{self, Value};
 use error::{Error, ErrorKind};
 use client::{Client, YumBatchFuture, YumFuture};
 
-type Op1<T> = Box<Fn(Value) -> Result<T, Error>>;
+type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
 
 fn de<T: DeserializeOwned>(v: Value) -> Result<T, Error> {
     serde_json::from_value(v).map_err(Into::into)
@@ -48,6 +48,27 @@ impl YumClient {
 
     pub fn block_number(&self) -> YumFuture<u64> {
         self.client.request("eth_blockNumber", Vec::new(), de_u64)
+    }
+
+    pub fn classify_addresses(&self, addresses: Vec<H160>) -> YumBatchFuture<AddressType> {
+        let mut requests: Vec<(&str, Vec<Value>, Op1<AddressType>)> = Vec::new();
+
+        for address in addresses {
+            let op = Box::new(move |v: Value| {
+                de::<String>(v)
+                    .map(|code| {
+                        if code.len() > 2 {
+                            AddressType::Contract(address.clone())
+                        } else {
+                            AddressType::Address(address.clone())
+                        }
+                    })
+            });
+            requests.push(
+                ("eth_getCode", vec![ser(&address)], op)
+            );
+        }
+        self.client.batch_request(requests)
     }
 
     pub fn coinbase(&self) -> YumFuture<H160> {
