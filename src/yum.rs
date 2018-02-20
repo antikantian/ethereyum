@@ -25,6 +25,15 @@ fn ser<T: Serialize>(t: &T) -> Value {
     serde_json::to_value(&t).expect("Serialize is serializable")
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogParams {
+    from_block: U256,
+    to_block: U256,
+    address: H160,
+    topics: Vec<H256>
+}
+
 pub struct YumClient {
     client: Client
 }
@@ -97,7 +106,7 @@ impl YumClient {
     {
         self.client.request(
             "eth_getBlockByNumber",
-            vec![ser(&BlockNumber::Number(block)), ser(&with_tx)],
+            vec![ser(&U256::from(block)), ser(&with_tx)],
             de::<Option<Block>>
         )
     }
@@ -107,8 +116,12 @@ impl YumClient {
 
         for block in blocks {
             let op = Box::new(|v: Value| { de::<Option<Block>>(v) });
+            let b = match block {
+                BlockNumber::Number(n) => serde_json::to_value(&U256::from(n)).unwrap(),
+                BlockNumber::Name(n) => serde_json::to_value(&n).unwrap()
+            };
 
-            requests.push(("eth_getBlockByNumber", vec![ser(&block), ser(&with_tx)], op))
+            requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
         }
         self.client.batch_request(requests)
     }
@@ -138,13 +151,37 @@ impl YumClient {
         self.client.request("eth_getCode", vec![ser(&address), ser(&block)], de::<String>)
     }
 
-    pub fn get_logs(&self, from: &BlockNumber, to: &BlockNumber, address: &H160, topic: &H256)
+    pub fn get_logs(&self, from: u64, to: u64, address: &H160, topic: &H256)
         -> YumFuture<Vec<Log>>
     {
-        let mut params = HashMap::new();
-        params.insert("topics".to_string(), vec![address.clone()]);
+        let log_params: Value = serde_json::to_value(LogParams {
+            from_block: U256::from(from),
+            to_block: U256::from(to),
+            address: address.clone(),
+            topics: vec![topic.clone()]
+        }).expect("Serialization won't fail");
 
-        self.client.request("eth_getLogs", vec![ser(&params)], de::<Vec<Log>>)
+        self.client.request("eth_getLogs", vec![log_params], de::<Vec<Log>>)
+    }
+
+    pub fn get_logs_n_topics(&self, from: u64, to: u64, address: &H160, topics: Vec<H256>)
+        -> YumBatchFuture<Vec<Log>>
+    {
+        let mut requests: Vec<(&str, Vec<Value>, Op1<Vec<Log>>)> = Vec::new();
+
+        for topic in topics {
+            let op = Box::new(|v: Value| de::<Vec<Log>>(v));
+            let log_params: Value = serde_json::to_value(LogParams {
+                from_block: U256::from(from),
+                to_block: U256::from(to),
+                address: address.clone(),
+                topics: vec![topic.clone()]
+            }).expect("Serialization won't fail");
+            requests.push(
+                ("eth_getLogs", vec![log_params], op)
+            );
+        }
+        self.client.batch_request(requests)
     }
 
     pub fn get_num_transactions_sent(&self, address: &H160, block: &BlockNumber)
@@ -200,5 +237,3 @@ impl YumClient {
     }
 
 }
-
-

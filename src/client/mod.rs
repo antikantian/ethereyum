@@ -19,7 +19,7 @@ use serde_json::{self, Value};
 use ws;
 
 use error::{Error, ErrorKind};
-pub use self::result::{YumBatchFuture, YumFuture};
+pub use self::result::{YumBatchFuture, YumBatchFutureT, YumFuture};
 
 #[derive(Debug)]
 pub enum RpcResponse {

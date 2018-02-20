@@ -26,6 +26,7 @@ url = "1.6.0"
 ws = "0.7.3"
 
 [dev-dependencies]
+ansi_term = "0.9"
 crossbeam-utils = "0.2"
 jsonrpc-ws-server = { version = "8.0", git = "https://github.com/paritytech/jsonrpc.git" }
 web3 = { version = "0.2.0", git = "https://github.com/tomusdrw/rust-web3.git" }

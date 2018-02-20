@@ -36,5 +36,5 @@ pub mod client;
 pub mod error;
 pub mod yum;
 
-pub use self::client::YumFuture;
+pub use self::client::{YumBatchFuture, YumBatchFutureT, YumFuture};
 pub use self::error::{Error, ErrorKind};
