@@ -1,5 +1,5 @@
 use std::{u64, vec};
-use std::collections::HashMap;
+use std::collections::{HashMap};
 
 use ethereum_models::objects::*;
 use ethereum_models::types::{H160, H256, U256};
@@ -96,10 +96,42 @@ impl YumClient {
     pub fn get_block_by_number(&self, block: u64, with_tx: bool) -> YumFuture<Option<Block>>
     {
         self.client.request(
-            "eth_getBlockByHash",
+            "eth_getBlockByNumber",
             vec![ser(&BlockNumber::Number(block)), ser(&with_tx)],
             de::<Option<Block>>
         )
+    }
+
+    pub fn _get_blocks(&self, blocks: Vec<BlockNumber>, with_tx: bool) -> YumBatchFuture<Option<Block>> {
+        let mut requests: Vec<(&str, Vec<Value>, Op1<Option<Block>>)> = Vec::new();
+
+        for block in blocks {
+            let op = Box::new(|v: Value| { de::<Option<Block>>(v) });
+
+            requests.push(("eth_getBlockByNumber", vec![ser(&block), ser(&with_tx)], op))
+        }
+        self.client.batch_request(requests)
+    }
+
+    pub fn get_blocks(&self, blocks: &[u64], with_tx: bool) -> YumBatchFuture<Option<Block>> {
+        self._get_blocks(
+            blocks
+                .into_iter()
+                .map(|b| BlockNumber::Number(*b))
+                .collect::<Vec<BlockNumber>>(),
+            with_tx
+        )
+    }
+
+    pub fn get_block_range(&self, from: u64, to: u64, with_tx: bool)
+        -> YumBatchFuture<Option<Block>>
+    {
+        let blocks = (from..to)
+            .into_iter()
+            .map(|n| BlockNumber::Number(n))
+            .collect::<Vec<BlockNumber>>();
+
+        self._get_blocks(blocks, with_tx)
     }
 
     pub fn get_code(&self, address: &H160, block: &BlockNumber) -> YumFuture<String> {
