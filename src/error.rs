@@ -29,6 +29,10 @@ error_chain! {
         description("rpc errpr"),
         display("RPC error: {}", e)
     }
+    SocketTimeout(t: u64) {
+        description("socket timeout error"),
+        display("Couldn't connect to host, socket timed out after: {}", t)
+    }
     YumError(e: String) {
         description("ethereyum error"),
         display("EthereYUM: {}", e)

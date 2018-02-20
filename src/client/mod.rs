@@ -71,6 +71,10 @@ impl Client {
         Ok(client)
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.sockets.lock().iter().any(|worker| !worker.is_closed.load(Ordering::Relaxed))
+    }
+
     pub fn request<T: DeserializeOwned>(
         &self,
         method: &str,

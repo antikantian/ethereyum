@@ -1,5 +1,6 @@
 use std::{u64, vec};
 use std::collections::{HashMap};
+use std::time::{Duration, Instant};
 
 use ethereum_models::objects::*;
 use ethereum_models::types::{H160, H256, U256};
@@ -40,7 +41,23 @@ pub struct YumClient {
 
 impl YumClient {
     pub fn new(host: &str, connections: u32) -> Result<Self, Error> {
-        Client::new(host, connections).map(|c| YumClient { client: c })
+        Client::new(host, connections)
+            .and_then(|c| {
+                let t0 = Instant::now();
+                loop {
+                    if t0.elapsed().as_secs() >= 10 {
+                        return Err(ErrorKind::SocketTimeout(10_u64).into());
+                    }
+
+                    if c.is_connected() {
+                        break;
+                    } else {
+                        continue
+                    }
+                }
+                Ok(c)
+            })
+            .map(|c| YumClient { client: c })
     }
 
     pub fn accounts(&self) -> YumFuture<Vec<H160>> {
