@@ -1,25 +1,17 @@
-use std::{slice, u64, vec};
+use std::{u64, vec};
 use std::collections::HashMap;
 
 use ethereum_models::objects::*;
 use ethereum_models::types::{H160, H256, U256};
-use fixed_hash::clean_0x;
-use futures::{self, Map, future, AndThen, Async, Then, Poll, Future, IntoFuture};
-use futures::sync::oneshot;
-use futures::future::join_all;
-use futures::future::JoinAll;
-use itertools::{self, Itertools, zip};
-use rpc;
-use serde::de::{DeserializeOwned, Deserializer};
+use futures::{future, AndThen, Async, Then, Poll, IntoFuture};
+use serde::de::{DeserializeOwned};
 use serde::ser::Serialize;
 use serde_json::{self, Value};
 
 use error::{Error, ErrorKind};
-use client::{Client, ClientResponse, YumFuture};
+use client::{Client, YumBatchFuture, YumFuture};
 
-
-pub type YumResult<T, E> = AndThen<ClientResponse, Result<Result<T, E>, Error>,
-    fn(Result<Value, Error>) -> Result<Result<T, E>, Error>>;
+type Op1<T> = Box<Fn(Value) -> Result<T, Error>>;
 
 fn de<T: DeserializeOwned>(v: Value) -> Result<T, Error> {
     serde_json::from_value(v).map_err(Into::into)
@@ -27,6 +19,10 @@ fn de<T: DeserializeOwned>(v: Value) -> Result<T, Error> {
 
 fn de_u64(v: Value) -> Result<u64, Error> {
     de::<U256>(v).map(|u256| u256.low_u64())
+}
+
+fn ser<T: Serialize>(t: &T) -> Value {
+    serde_json::to_value(&t).expect("Serialize is serializable")
 }
 
 pub struct YumClient {
@@ -110,12 +106,37 @@ impl YumClient {
         )
     }
 
-    pub fn get_transaction_receipt(&self, tx_hash: &H256)
+    pub fn get_transactions(&self, txns: Vec<H256>) -> YumBatchFuture<Option<Transaction>> {
+        let mut requests: Vec<(&str, Vec<Value>, Op1<Option<Transaction>>)> = Vec::new();
+
+        for tx in txns {
+            let op = Box::new(|v: Value| de::<Option<Transaction>>(v));
+            requests.push(
+                ("eth_getTransactionByHash", vec![ser(&tx)], op)
+            );
+        }
+        self.client.batch_request(requests)
+    }
+
+    pub fn get_transaction_receipt(&self, tx: &H256)
         -> YumFuture<Option<TransactionReceipt>>
     {
         self.client.request(
-            "eth_getTransactionReceipt", vec![ser(&tx_hash)], de::<Option<TransactionReceipt>>
+            "eth_getTransactionReceipt", vec![ser(&tx)], de::<Option<TransactionReceipt>>
         )
+    }
+
+    pub fn get_transaction_receipts(&self, txns: &[H256])
+        -> YumBatchFuture<Option<TransactionReceipt>>
+    {
+        let mut requests: Vec<(&str, Vec<Value>, Op1<Option<TransactionReceipt>>)> = Vec::new();
+        for tx in txns {
+            let op = Box::new(|v: Value| de::<Option<TransactionReceipt>>(v));
+            requests.push(
+                ("eth_getTransactionReceipt", vec![ser(&tx)], op)
+            );
+        }
+        self.client.batch_request(requests)
     }
 
     #[cfg(feature = "parity")]
@@ -127,6 +148,4 @@ impl YumClient {
 
 }
 
-pub fn ser<T: Serialize>(t: &T) -> Value {
-    serde_json::to_value(&t).expect("Serialize is serializable")
-}
+

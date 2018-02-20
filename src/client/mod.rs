@@ -10,7 +10,7 @@ use std::convert::From;
 
 use fnv::FnvHashMap;
 use futures::{Async, Poll, future, Future};
-use futures::future::join_all;
+use futures::future::{JoinAll, join_all};
 use futures::sync::oneshot;
 use parking_lot::Mutex;
 use rpc::{self, Output};
@@ -19,7 +19,7 @@ use serde_json::{self, Value};
 use ws;
 
 use error::{Error, ErrorKind};
-pub use self::result::YumFuture;
+pub use self::result::{YumBatchFuture, YumFuture};
 
 #[derive(Debug)]
 pub enum RpcResponse {
@@ -95,37 +95,23 @@ impl Client {
         YumFuture::Waiting(rx, de)
     }
 
-    pub fn execute_request(&self, method: &str, params: Vec<Value>) -> ClientResponse {
-        let (tx, rx) = oneshot::channel();
-
-        let id = self.next_id();
-        let request = build_request(id, &method, params);
-
-        self.pending.lock().insert(id, tx);
-
-        let serialized_request = serde_json::to_string(&request)
-            .expect("Serialization never fails");
-
-        trace!("Writing request to socket: {:?}", &request);
-
-        ClientResponse::new(
-            id, self.send(ws::Message::Text(serialized_request)), rx
-        )
-    }
-
-    pub fn execute_batch(&self, requests: Vec<(String, Vec<Value>)>) -> Vec<ClientResponse> {
+    pub fn batch_request<T: DeserializeOwned>(
+        &self,
+        requests: Vec<(&str, Vec<Value>, Box<Fn(Value) -> Result<T, Error>>)>)
+        -> YumBatchFuture<T>
+    {
         let mut guard = self.pending.lock();
         let mut calls = Vec::new();
         let mut responses = Vec::new();
 
-        for (method, params) in requests {
+        for (method, params, de) in requests {
             let (tx, rx) = oneshot::channel();
             let id = self.next_id();
             let request = build_request(id, &method, params);
 
             calls.push(request);
             guard.insert(id, tx);
-            responses.push((id, rx));
+            responses.push((rx, de));
         }
         guard.unlock_fair();
 
@@ -135,19 +121,19 @@ impl Client {
 
         trace!("Writing batch request to socket: {:?}", &serialized_batch_calls);
 
-        let send_status = &self.send(ws::Message::Text(serialized_batch_calls));
-        let get_status = || {
-            if send_status.is_ok() {
-                Ok(())
-            } else {
-                Err(ErrorKind::BatchRequestError.into())
-            }
-        };
+        if let Err(_) = self.send(ws::Message::Text(serialized_batch_calls)) {
+            return YumBatchFuture::Waiting(join_all(responses
+                .into_iter()
+                .map(|_| YumFuture::Error(ErrorKind::YumError("Couldn't send request".into()).into()))
+                .collect::<Vec<YumFuture<_>>>()));
+        }
 
-        responses
+        let futs = responses
             .into_iter()
-            .map(|(id, rx)| ClientResponse::new(id, get_status(), rx))
-            .collect::<Vec<ClientResponse>>()
+            .map(|(rx, de)| YumFuture::WaitingFn(rx, de))
+            .collect::<Vec<YumFuture<T>>>();
+
+        YumBatchFuture::Waiting(join_all(futs))
     }
 
     fn start_connection(&mut self) -> Result<(), Error> {

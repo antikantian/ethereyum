@@ -14,7 +14,7 @@ use futures::future::join_all;
 use ethereum_models::types::{H160, H256, U256};
 use ethereum_models::objects::*;
 use ethereyum::client::Client;
-use ethereyum::yum::{YumClient, ser};
+use ethereyum::yum::{YumClient};
 use serde::de::*;
 use serde::de;
 use serde_json::Value;
@@ -34,9 +34,13 @@ fn main() {
 
     println!("hmmm");
 
-    let address1 = H160::from_str("5d14fe1e974640dA880E2f04382F2c679E15bc84").unwrap();
+    let mut txs = Vec::new();
 
-    let x = client.block_number().wait();
+    for _ in 0..10 {
+        txs.push(H256::from_str("24db5963104c6aa4ab45c977a5dffb7ad2e273731ecf95165e5852751e6b903a").unwrap());
+    }
+
+    let x = client.get_transactions(txs).wait();
 
     println!("{:?}", x);
 
