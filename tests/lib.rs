@@ -36,7 +36,7 @@ mod yum_tests {
     use crossbeam_utils as crossbeam;
     use ethereum_models::objects::BlockNumber;
     use ethereum_models::types::{H160, U256};
-    use ethereyum::yum::{YumClient, YumResult};
+    use ethereyum::yum::{YumClient};
     use futures::Future;
     use futures::future::lazy;
     use jsonrpc_core::*;
