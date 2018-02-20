@@ -111,7 +111,9 @@ impl YumClient {
         )
     }
 
-    pub fn _get_blocks(&self, blocks: Vec<BlockNumber>, with_tx: bool) -> YumBatchFuture<Option<Block>> {
+    pub fn _get_blocks(&self, blocks: Vec<BlockNumber>, with_tx: bool)
+        -> YumBatchFuture<Option<Block>>
+    {
         let mut requests: Vec<(&str, Vec<Value>, Op1<Option<Block>>)> = Vec::new();
 
         for block in blocks {
@@ -234,6 +236,19 @@ impl YumClient {
         self.client.request(
             "trace_transaction", vec![ser(&tx_hash)], de::<Vec<ParityTrace>>
         )
+    }
+
+    #[cfg(feature = "parity")]
+    pub fn trace_transactions(&self, txns: &[H256]) -> YumBatchFuture<Vec<ParityTrace>> {
+        let mut requests: Vec<(&str, Vec<Value>, Op1<Vec<ParityTrace>>)> = Vec::new();
+
+        for tx in txns {
+            let op = Box::new(|v: Value| de::<Vec<ParityTrace>>(v));
+            requests.push(
+                ("trace_transaction", vec![ser(&tx)], op)
+            );
+        }
+        self.client.batch_request(requests)
     }
 
 }
