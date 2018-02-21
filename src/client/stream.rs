@@ -23,7 +23,7 @@ impl BlockStream {
 
         trace!("Building block stream");
 
-        for block_chunk in block_range.as_slice().chunks(100) {
+        for block_chunk in block_range.as_slice().chunks(10) {
             let batch = client.get_blocks(block_chunk, with_tx);
 
             if let YumBatchFuture::Waiting(futs) = batch {

@@ -29,7 +29,7 @@ fn main() {
 
     let from_block = 5000000;
     let to_block = 5010000;
-    // 1,000 blocks;
+    // 10,000 blocks;
     let total_blocks = to_block - from_block;
     let start_time = Instant::now();
 
