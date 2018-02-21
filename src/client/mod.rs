@@ -1,4 +1,5 @@
 mod result;
+mod stream;
 
 use std::collections::{HashMap, VecDeque};
 use std::{self, io};
@@ -20,6 +21,7 @@ use ws;
 
 use error::{Error, ErrorKind};
 pub use self::result::{YumBatchFuture, YumBatchFutureT, YumFuture};
+pub use self::stream::BlockStream;
 
 #[derive(Debug)]
 pub enum RpcResponse {
@@ -125,13 +127,13 @@ impl Client {
         let serialized_batch_calls = serde_json::to_string(&batch_call)
             .expect("Serialization never fails");
 
-        trace!("Writing batch request to socket: {:?}", &serialized_batch_calls);
+        //trace!("Writing batch request to socket: {:?}", &serialized_batch_calls);
 
         if let Err(_) = self.send(ws::Message::Text(serialized_batch_calls)) {
-            return YumBatchFuture::Waiting(join_all(responses
+            return YumBatchFuture::Waiting(responses
                 .into_iter()
                 .map(|_| YumFuture::Error(ErrorKind::YumError("Couldn't send request".into()).into()))
-                .collect::<Vec<YumFuture<_>>>()));
+                .collect::<Vec<YumFuture<_>>>());
         }
 
         let futs = responses
@@ -139,7 +141,7 @@ impl Client {
             .map(|(rx, de)| YumFuture::WaitingFn(rx, de))
             .collect::<Vec<YumFuture<T>>>();
 
-        YumBatchFuture::Waiting(join_all(futs))
+        YumBatchFuture::Waiting(futs)
     }
 
     fn start_connection(&mut self) -> Result<(), Error> {
@@ -349,7 +351,7 @@ impl ws::Handler for SocketConnection {
     }
 
     fn on_message(&mut self, msg: ws::Message) -> Result<(), ws::Error> {
-        trace!("Received message: {}", &msg);
+        //trace!("Received message: {}", &msg);
 
         let decoded_msg = match msg.clone() {
             ws::Message::Text(resp) => handle_text_message(resp),
@@ -364,7 +366,7 @@ impl ws::Handler for SocketConnection {
                 let (id, result) = response.into_response();
 
                 if let Some(pending_request) = guard.remove(&id) {
-                    trace!("Responding to (id: {}) with {:?}", id, result);
+                    //trace!("Responding to request (id: {})", id);
                     if let Err(e) = pending_request.send(result) {
                         warn!("Receiving end deallocated for response: {:?}", e);
                     }

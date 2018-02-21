@@ -118,14 +118,14 @@ fn main() {
     let get_block_range = {
         match yum.get_block_range(5000000, 5000009, true).wait() {
             Ok(blocks) => {
-                if blocks.len() == 9 {
-                    println!("yum.get_block_range() [count: 9] ... {}", Green.paint("passed"))
+                if blocks.len() == 10 {
+                    println!("yum.get_block_range() [count: 10] ... {}", Green.paint("passed"))
                 } else {
-                    println!("yum.get_block_range() [count: 9] ... {}: expected 9, got {}", Red.paint("failed"), blocks.len())
+                    println!("yum.get_block_range() [count: 10] ... {}: expected 10, got {}", Red.paint("failed"), blocks.len())
                 }
 
             },
-            Err(e) => println!("yum.get_block_range() [count: 9] ... {}: {:?}", Red.paint("failed"), e)
+            Err(e) => println!("yum.get_block_range() [count: 10] ... {}: {:?}", Red.paint("failed"), e)
         }
     };
 

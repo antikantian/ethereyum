@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::mem;
 use std::sync::Arc;
 
@@ -9,8 +7,7 @@ use futures::sync::oneshot;
 use serde::de::DeserializeOwned;
 use serde_json::{self, Value};
 
-use error;
-use error::Error;
+use error::{Error, ErrorKind};
 
 pub enum YumFuture<T> {
     Waiting(oneshot::Receiver<Result<Value, Error>>, fn(Value) -> Result<T, Error>),
@@ -71,10 +68,15 @@ impl<T> Future for YumFuture<T>
     }
 }
 
+pub enum ItemState<T> {
+    Pending(YumFuture<T>),
+    Done(T)
+}
+
 pub enum YumBatchFuture<T: DeserializeOwned + Send + Sync + 'static> {
-    Waiting(JoinAll<Vec<YumFuture<T>>>),
-    Complete,
-    Error(Error)
+    Waiting(Vec<YumFuture<T>>),
+    Polling(JoinAll<Vec<YumFuture<T>>>),
+    Done
 }
 
 impl<T> Future for YumBatchFuture<T>
@@ -85,21 +87,20 @@ impl<T> Future for YumBatchFuture<T>
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         use client::result::YumBatchFuture::*;
-        match mem::replace(self, Complete) {
-            Waiting(mut jyf) => {
-                if let Async::Ready(vyf) = jyf.poll()? {
-                    *self = Complete;
-                    return Ok(Async::Ready(vyf));
+        match mem::replace(self, Done) {
+            Waiting(ref mut futs) => {
+                *self = Polling(join_all(futs.drain(..).collect()));
+                return self.poll();
+            },
+            Polling(mut futs) => {
+                if let Async::Ready(yf) = futs.poll()? {
+                    return Ok(Async::Ready(yf))
                 } else {
-                    *self = Waiting(jyf);
+                    *self = Polling(futs);
                 }
             },
-            Complete => {},
-            Error(e) => {
-                *self = Complete;
-                return Err(e)
-            }
-        };
+            Done => unreachable!()
+        }
         Ok(Async::NotReady)
     }
 }

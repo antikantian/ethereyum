@@ -10,7 +10,7 @@ use serde::ser::Serialize;
 use serde_json::{self, Value};
 
 use error::{Error, ErrorKind};
-use client::{Client, YumBatchFuture, YumFuture};
+use client::{BlockStream, Client, YumBatchFuture, YumFuture};
 
 type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
 
@@ -158,12 +158,18 @@ impl YumClient {
     pub fn get_block_range(&self, from: u64, to: u64, with_tx: bool)
         -> YumBatchFuture<Option<Block>>
     {
-        let blocks = (from..to)
+        // Why is inclusive range syntax experimental in Rust?  Shouldn't that be
+        // in Rust stable?
+        let blocks = (from..to + 1)
             .into_iter()
             .map(|n| BlockNumber::Number(n))
             .collect::<Vec<BlockNumber>>();
 
         self._get_blocks(blocks, with_tx)
+    }
+
+    pub fn get_block_stream(&self, from: u64, to: u64, with_tx: bool) -> BlockStream {
+        BlockStream::new(&self, from, to, with_tx)
     }
 
     pub fn get_code(&self, address: &H160, block: &BlockNumber) -> YumFuture<String> {
