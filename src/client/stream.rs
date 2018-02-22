@@ -34,7 +34,7 @@ impl BlockStream {
             to,
             client,
             with_tx,
-            chunk_size: 1,
+            chunk_size: 10,
             has_next: true,
             queue: VecDeque::new(),
             buffer: VecDeque::new()
@@ -59,6 +59,16 @@ impl BlockStream {
             }
         }
         queue
+    }
+
+    fn fill_buffer(&mut self, n: u64) {
+        let mut count = 0;
+        while self.has_next() && count < n {
+            if let Some(mut queue) = self.next() {
+                self.buffer.append(&mut queue);
+                count += 1;
+            }
+        }
     }
 
     fn has_next(&self) -> bool {
@@ -136,24 +146,37 @@ impl Stream for BlockStream {
                 if let Some(next_queue) = self.next() {
                     trace!("Have next queue");
                     self.queue = next_queue;
-                    if let Some(buffered_queue) = self.next() {
-                        self.buffer = buffered_queue;
+                    if self.has_next() {
+                        self.fill_buffer(2);
                     } else {
                         trace!("Lazy stream finished");
                         return Ok(Async::Ready(None));
                     }
+//                    if let Some(buffered_queue) = self.next() {
+//                        self.buffer = buffered_queue;
+//                    } else {
+//                        trace!("Lazy stream finished");
+//                        return Ok(Async::Ready(None));
+//                    }
                 } else {
                     return Ok(Async::Ready(None));
                 }
             } else {
                 mem::swap(&mut self.queue, &mut self.buffer);
-                if let Some(next_queue) = self.next() {
-                    self.buffer = next_queue;
+                if self.has_next() {
+                    self.fill_buffer(2);
                 } else {
                     if self.queue.is_empty() && self.buffer.is_empty() {
                         return Ok(Async::Ready(None))
                     }
                 }
+//                if let Some(next_queue) = self.next() {
+//                    self.buffer = next_queue;
+//                } else {
+//                    if self.queue.is_empty() && self.buffer.is_empty() {
+//                        return Ok(Async::Ready(None))
+//                    }
+//                }
             }
         }
     }
