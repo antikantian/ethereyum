@@ -21,7 +21,7 @@ use ws;
 
 use error::{Error, ErrorKind};
 pub use self::result::{YumBatchFuture, YumBatchFutureT, YumFuture};
-pub use self::stream::BlockStream;
+pub use self::stream::{BlockStream};
 
 #[derive(Debug)]
 pub enum RpcResponse {
@@ -93,7 +93,7 @@ impl Client {
         let serialized_request = serde_json::to_string(&request)
             .expect("Serialization never fails");
 
-        trace!("Writing request to socket: {:?}", &request);
+        trace!("Writing request to socket");
 
         if let Err(_) = self.send(ws::Message::Text(serialized_request.clone())) {
             return YumFuture::Error(ErrorKind::YumError(
@@ -127,7 +127,7 @@ impl Client {
         let serialized_batch_calls = serde_json::to_string(&batch_call)
             .expect("Serialization never fails");
 
-        //trace!("Writing batch request to socket: {:?}", &serialized_batch_calls);
+        trace!("Writing batch request to socket)");
 
         if let Err(_) = self.send(ws::Message::Text(serialized_batch_calls)) {
             return YumBatchFuture::Waiting(responses
@@ -366,7 +366,7 @@ impl ws::Handler for SocketConnection {
                 let (id, result) = response.into_response();
 
                 if let Some(pending_request) = guard.remove(&id) {
-                    //trace!("Responding to request (id: {})", id);
+                    trace!("Responding to request (id: {})", id);
                     if let Err(e) = pending_request.send(result) {
                         warn!("Receiving end deallocated for response: {:?}", e);
                     }

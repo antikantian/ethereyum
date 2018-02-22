@@ -3,70 +3,111 @@ use std::mem;
 
 use ethereum_models::objects::Block;
 use futures::{Async, Future, Poll, Stream};
-use futures::future::JoinAll;
+use futures::future::{JoinAll, Lazy, lazy};
 use futures::sync::oneshot;
 
 use client::{Client, YumFuture, YumBatchFuture};
+use futures::stream::Buffered;
 use error::{Error, ErrorKind};
 use yum::YumClient;
 
-pub enum BlockStream {
-    Processing(VecDeque<YumFuture<Option<Block>>>),
-    Error(Error),
-    Done
+pub struct BlockStream<'a> {
+    from: u64,
+    to: u64,
+    chunk_size: u64,
+    has_next: bool,
+    with_tx: bool,
+    queue: VecDeque<YumFuture<Option<Block>>>,
+    client: &'a YumClient
 }
 
-impl BlockStream {
-    pub fn new(client: &YumClient, from: u64, to: u64, with_tx: bool) -> Self {
-        let mut queue: VecDeque<YumFuture<Option<Block>>> = VecDeque::new();
-        let block_range = (from..to + 1).collect::<Vec<u64>>().into_iter();
+impl<'a> BlockStream<'a> {
+    pub fn new(client: &'a YumClient, from: u64, to: u64, with_tx: bool) -> Self {
+        BlockStream {
+            from,
+            to,
+            client,
+            with_tx,
+            chunk_size: 10,
+            has_next: true,
+            queue: VecDeque::new(),
+        }
+    }
 
-        trace!("Building block stream");
+    fn build_queue(&self, from: u64, to: u64)
+        -> VecDeque<YumFuture<Option<Block>>>
+    {
+        let mut queue: VecDeque<YumFuture<Option<Block>>> = VecDeque::new();
+        let block_range = (from..to).collect::<Vec<u64>>().into_iter();
 
         for block_chunk in block_range.as_slice().chunks(10) {
-            let batch = client.get_blocks(block_chunk, with_tx);
+            let batch = self.client.get_blocks(block_chunk, self.with_tx);
 
             if let YumBatchFuture::Waiting(futs) = batch {
                 for f in futs {
                     queue.push_back(f);
                 }
+            } else {
+                unreachable!()
             }
         }
-        BlockStream::Processing(queue)
+        queue
+    }
+
+    fn next(&mut self) -> Option<VecDeque<YumFuture<Option<Block>>>> {
+        if !self.has_next {
+            trace!("Items exhausted");
+            None
+        } else {
+            if self.to - self.from < self.chunk_size {
+                trace!("Getting final chunk: {} -> {}", self.from, self.to);
+                let chunk_from = self.from;
+                let chunk_to = self.to;
+                self.from = chunk_to;
+                self.has_next = false;
+                Some(self.build_queue(chunk_from, chunk_to + 1))
+            } else {
+                let chunk_from = self.from;
+                let chunk_to = self.from + self.chunk_size;
+                trace!("Getting next chunk: {} -> {}", chunk_from, chunk_to);
+                self.from = chunk_to;
+                let built_queue = self.build_queue(chunk_from, chunk_to);
+                trace!("Have next chunk, length: {}", &built_queue.len());
+                Some(built_queue)
+            }
+        }
     }
 }
 
-impl Stream for BlockStream {
+impl<'a> Stream for BlockStream<'a> {
     type Item = Block;
     type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
-        trace!("Polling stream");
-        use self::BlockStream::*;
-
-        match mem::replace(self, Done) {
-            Processing(mut block_queue) => {
-                if let Some(mut block_f) = block_queue.pop_front() {
-                    if let Async::Ready(block) = block_f.poll()? {
-                        trace!("Next block in stream available");
-                        *self = Processing(block_queue);
-                        if let Some(b) = block {
-                            return Ok(Async::Ready(Some(b)));
-                        }
+        trace!("Polling lazy stream");
+        loop {
+            while let Some(mut block_f) = self.queue.pop_front() {
+                if let Async::Ready(block) = block_f.poll()? {
+                    trace!("Next block in lazy stream available");
+                    if let Some(b) = block {
+                        return Ok(Async::Ready(Some(b)));
                     } else {
-                        block_queue.push_front(block_f);
-                        *self = Processing(block_queue);
+                        return Ok(Async::NotReady)
                     }
                 } else {
-                    return Ok(Async::Ready(None));
+                    trace!("Item not ready, pushing back to queue, remaining: {}", self.queue.len());
+                    self.queue.push_front(block_f);
+                    return Ok(Async::NotReady)
                 }
-            },
-            Error(e) => {
-                *self = Done;
-                return Err(e);
-            },
-            Done => {}
-        };
-        Ok(Async::NotReady)
+            }
+
+            if let Some(next_queue) = self.next() {
+                trace!("Have next queue");
+                self.queue = next_queue;
+            } else {
+                trace!("Lazy stream finished");
+                return Ok(Async::Ready(None));
+            }
+        }
     }
 }
