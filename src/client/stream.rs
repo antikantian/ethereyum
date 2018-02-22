@@ -1,28 +1,31 @@
 use std::collections::VecDeque;
 use std::mem;
+use std::sync::Arc;
 
 use ethereum_models::objects::Block;
 use futures::{Async, Future, Poll, Stream};
 use futures::future::{JoinAll, Lazy, lazy};
 use futures::sync::oneshot;
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 
-use client::{Client, YumFuture, YumBatchFuture};
+use client::{BlockOps, Client, YumFuture, YumBatchFuture};
 use futures::stream::Buffered;
 use error::{Error, ErrorKind};
-use yum::YumClient;
+use yum::Op1;
 
-pub struct BlockStream<'a> {
+pub struct BlockStream {
     from: u64,
     to: u64,
     chunk_size: u64,
     has_next: bool,
     with_tx: bool,
     queue: VecDeque<YumFuture<Option<Block>>>,
-    client: &'a YumClient
+    client: Arc<Client>
 }
 
-impl<'a> BlockStream<'a> {
-    pub fn new(client: &'a YumClient, from: u64, to: u64, with_tx: bool) -> Self {
+impl BlockStream {
+    pub fn new(client: Arc<Client>, from: u64, to: u64, with_tx: bool) -> Self {
         BlockStream {
             from,
             to,
@@ -41,7 +44,7 @@ impl<'a> BlockStream<'a> {
         let block_range = (from..to).collect::<Vec<u64>>().into_iter();
 
         for block_chunk in block_range.as_slice().chunks(10) {
-            let batch = self.client.get_blocks(block_chunk, self.with_tx);
+            let batch = self.get_blocks(block_chunk, self.with_tx);
 
             if let YumBatchFuture::Waiting(futs) = batch {
                 for f in futs {
@@ -79,7 +82,27 @@ impl<'a> BlockStream<'a> {
     }
 }
 
-impl<'a> Stream for BlockStream<'a> {
+impl BlockOps for BlockStream {
+    fn request<T>(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+        de: fn(Value) -> Result<T, Error>) -> YumFuture<T>
+        where T: DeserializeOwned
+    {
+        self.client.request(method, params, de)
+    }
+
+    fn batch_request<T>(
+        &self,
+        req: Vec<(&str, Vec<Value>, Box<Fn(Value) -> Result<T, Error> + Send + Sync>)>)
+        -> YumBatchFuture<T> where T: DeserializeOwned + Send + Sync + 'static
+    {
+        self.client.batch_request(req)
+    }
+}
+
+impl Stream for BlockStream {
     type Item = Block;
     type Error = Error;
 

@@ -1,5 +1,6 @@
 use std::{u64, vec};
 use std::collections::{HashMap};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ethereum_models::objects::*;
@@ -12,17 +13,17 @@ use serde_json::{self, Value};
 use error::{Error, ErrorKind};
 use client::{BlockStream, Client, YumBatchFuture, YumFuture};
 
-type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
+pub type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
 
-fn de<T: DeserializeOwned>(v: Value) -> Result<T, Error> {
+pub fn de<T: DeserializeOwned>(v: Value) -> Result<T, Error> {
     serde_json::from_value(v).map_err(Into::into)
 }
 
-fn de_u64(v: Value) -> Result<u64, Error> {
+pub fn de_u64(v: Value) -> Result<u64, Error> {
     de::<U256>(v).map(|u256| u256.low_u64())
 }
 
-fn ser<T: Serialize>(t: &T) -> Value {
+pub fn ser<T: Serialize>(t: &T) -> Value {
     serde_json::to_value(&t).expect("Serialize is serializable")
 }
 
@@ -36,7 +37,7 @@ struct LogParams {
 }
 
 pub struct YumClient {
-    client: Client
+    client: Arc<Client>
 }
 
 impl YumClient {
@@ -57,7 +58,7 @@ impl YumClient {
                 }
                 Ok(c)
             })
-            .map(|c| YumClient { client: c })
+            .map(|c| YumClient { client: Arc::new(c) })
     }
 
     pub fn accounts(&self) -> YumFuture<Vec<H160>> {
@@ -169,7 +170,7 @@ impl YumClient {
     }
 
     pub fn get_block_stream(&self, from: u64, to: u64, with_tx: bool) -> BlockStream {
-        BlockStream::new(&self, from, to, with_tx)
+        BlockStream::new(self.client.clone(), from, to, with_tx)
     }
 
     pub fn get_code(&self, address: &H160, block: &BlockNumber) -> YumFuture<String> {

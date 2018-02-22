@@ -1,3 +1,4 @@
+mod ops;
 mod result;
 mod stream;
 
@@ -20,6 +21,7 @@ use serde_json::{self, Value};
 use ws;
 
 use error::{Error, ErrorKind};
+pub use self::ops::BlockOps;
 pub use self::result::{YumBatchFuture, YumBatchFutureT, YumFuture};
 pub use self::stream::{BlockStream};
 
