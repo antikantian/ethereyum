@@ -5,7 +5,9 @@ use std::sync::Arc;
 use ethereum_models::objects::Block;
 use futures::{Async, Future, Poll, Stream};
 use futures::future::{JoinAll, Lazy, lazy};
+use futures::stream::FuturesUnordered;
 use futures::sync::oneshot;
+use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
@@ -21,6 +23,7 @@ pub struct BlockStream {
     has_next: bool,
     with_tx: bool,
     queue: VecDeque<YumFuture<Option<Block>>>,
+    buffer: VecDeque<YumFuture<Option<Block>>>,
     client: Arc<Client>
 }
 
@@ -31,9 +34,10 @@ impl BlockStream {
             to,
             client,
             with_tx,
-            chunk_size: 10,
+            chunk_size: 1,
             has_next: true,
             queue: VecDeque::new(),
+            buffer: VecDeque::new()
         }
     }
 
@@ -43,7 +47,7 @@ impl BlockStream {
         let mut queue: VecDeque<YumFuture<Option<Block>>> = VecDeque::new();
         let block_range = (from..to).collect::<Vec<u64>>().into_iter();
 
-        for block_chunk in block_range.as_slice().chunks(10) {
+        for block_chunk in block_range.as_slice().chunks(self.chunk_size as usize) {
             let batch = self.get_blocks(block_chunk, self.with_tx);
 
             if let YumBatchFuture::Waiting(futs) = batch {
@@ -55,6 +59,10 @@ impl BlockStream {
             }
         }
         queue
+    }
+
+    fn has_next(&self) -> bool {
+        self.has_next
     }
 
     fn next(&mut self) -> Option<VecDeque<YumFuture<Option<Block>>>> {
@@ -119,17 +127,33 @@ impl Stream for BlockStream {
                     }
                 } else {
                     trace!("Item not ready, pushing back to queue, remaining: {}", self.queue.len());
-                    self.queue.push_front(block_f);
+                    self.queue.push_back(block_f);
                     return Ok(Async::NotReady)
                 }
             }
 
-            if let Some(next_queue) = self.next() {
-                trace!("Have next queue");
-                self.queue = next_queue;
+            if self.buffer.is_empty() {
+                if let Some(next_queue) = self.next() {
+                    trace!("Have next queue");
+                    self.queue = next_queue;
+                    if let Some(buffered_queue) = self.next() {
+                        self.buffer = buffered_queue;
+                    } else {
+                        trace!("Lazy stream finished");
+                        return Ok(Async::Ready(None));
+                    }
+                } else {
+                    return Ok(Async::Ready(None));
+                }
             } else {
-                trace!("Lazy stream finished");
-                return Ok(Async::Ready(None));
+                mem::swap(&mut self.queue, &mut self.buffer);
+                if let Some(next_queue) = self.next() {
+                    self.buffer = next_queue;
+                } else {
+                    if self.queue.is_empty() && self.buffer.is_empty() {
+                        return Ok(Async::Ready(None))
+                    }
+                }
             }
         }
     }
