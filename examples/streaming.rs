@@ -3,6 +3,7 @@ extern crate ethereyum;
 extern crate futures;
 extern crate pretty_env_logger;
 
+use std::io::{self, Write};
 use futures::prelude::*;
 use ethereum_models::objects::*;
 use ethereyum::client::{Client, BlockStream};
@@ -14,10 +15,11 @@ fn main() {
 
     let client = YumClient::new("ws://127.0.0.1:8546", 1).unwrap();
 
-    let bstream = client.get_block_stream(5000000, 5000025, true);
+    let bstream = client.get_block_stream(5000000, 5001000, true);
 
     bstream.for_each(|block| {
-        println!("Have block");
+        print!("Have block {}    \r", block.number.unwrap());
+        io::stdout().flush().unwrap();
         Ok(())
     }).wait();
 

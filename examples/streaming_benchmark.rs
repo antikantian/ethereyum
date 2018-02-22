@@ -67,7 +67,8 @@ fn main() {
 
     let client = YumClient::new("ws://127.0.0.1:8546", 1).unwrap();
 
-    let bstream = client.get_block_stream(from_block, to_block, true);
+    let bstream = client.get_block_stream(from_block, to_block, true)
+        .buffered(10);
 
     let run_it = bstream.for_each(|block| {
         blocks_processed.fetch_add(1, Ordering::Relaxed);
