@@ -34,7 +34,7 @@ impl BlockStream {
             to,
             client,
             with_tx,
-            chunk_size: 10,
+            chunk_size: 2,
             has_next: true,
             queue: VecDeque::new(),
             buffer: VecDeque::new()
@@ -147,7 +147,7 @@ impl Stream for BlockStream {
                     trace!("Have next queue");
                     self.queue = next_queue;
                     if self.has_next() {
-                        self.fill_buffer(2);
+                        self.fill_buffer(5);
                     } else {
                         trace!("Lazy stream finished");
                         return Ok(Async::Ready(None));
@@ -164,7 +164,7 @@ impl Stream for BlockStream {
             } else {
                 mem::swap(&mut self.queue, &mut self.buffer);
                 if self.has_next() {
-                    self.fill_buffer(2);
+                    self.fill_buffer(10);
                 } else {
                     if self.queue.is_empty() && self.buffer.is_empty() {
                         return Ok(Async::Ready(None))
