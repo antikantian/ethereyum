@@ -152,12 +152,6 @@ impl Stream for BlockStream {
                         trace!("Lazy stream finished");
                         return Ok(Async::Ready(None));
                     }
-//                    if let Some(buffered_queue) = self.next() {
-//                        self.buffer = buffered_queue;
-//                    } else {
-//                        trace!("Lazy stream finished");
-//                        return Ok(Async::Ready(None));
-//                    }
                 } else {
                     return Ok(Async::Ready(None));
                 }
@@ -170,13 +164,6 @@ impl Stream for BlockStream {
                         return Ok(Async::Ready(None))
                     }
                 }
-//                if let Some(next_queue) = self.next() {
-//                    self.buffer = next_queue;
-//                } else {
-//                    if self.queue.is_empty() && self.buffer.is_empty() {
-//                        return Ok(Async::Ready(None))
-//                    }
-//                }
             }
         }
     }
