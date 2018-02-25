@@ -1,106 +1,115 @@
-use std::collections::VecDeque;
+use std::cmp;
+use std::collections::{BTreeSet, VecDeque};
 use std::mem;
+use std::ops::Range;
 use std::sync::Arc;
 
 use ethereum_models::objects::Block;
-use futures::{Async, Future, Poll, Stream};
-use futures::future::{JoinAll, Lazy, lazy};
-use futures::stream::FuturesUnordered;
-use futures::sync::oneshot;
-use parking_lot::RwLock;
+use futures::{Async, Future, Stream};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use client::{BlockOps, Client, YumFuture, YumBatchFuture};
-use futures::stream::Buffered;
+use client::{Client, YumFuture, YumBatchFuture};
 use error::{Error, ErrorKind};
-use yum::Op1;
+use ops::{BlockOps, OpSet};
 
 pub struct BlockStream {
+    start_block: u64,
     from: u64,
     to: u64,
-    chunk_size: u64,
-    has_next: bool,
+    buffer_size: usize,
+    batch_size: u64,
     with_tx: bool,
     queue: VecDeque<YumFuture<Option<Block>>>,
-    buffer: VecDeque<YumFuture<Option<Block>>>,
+    completed: BTreeSet<u64>,
     client: Arc<Client>
 }
 
 impl BlockStream {
     pub fn new(client: Arc<Client>, from: u64, to: u64, with_tx: bool) -> Self {
         BlockStream {
+            start_block: from,
             from,
             to,
             client,
             with_tx,
-            chunk_size: 2,
-            has_next: true,
+            batch_size: 10,
+            buffer_size: 5,
             queue: VecDeque::new(),
-            buffer: VecDeque::new()
-        }
-    }
-
-    fn build_queue(&self, from: u64, to: u64)
-        -> VecDeque<YumFuture<Option<Block>>>
-    {
-        let mut queue: VecDeque<YumFuture<Option<Block>>> = VecDeque::new();
-        let block_range = (from..to).collect::<Vec<u64>>().into_iter();
-
-        for block_chunk in block_range.as_slice().chunks(self.chunk_size as usize) {
-            let batch = self.get_blocks(block_chunk, self.with_tx);
-
-            if let YumBatchFuture::Waiting(futs) = batch {
-                for f in futs {
-                    queue.push_back(f);
-                }
-            } else {
-                unreachable!()
-            }
-        }
-        queue
-    }
-
-    fn fill_buffer(&mut self, n: u64) {
-        let mut count = 0;
-        while self.has_next() && count < n {
-            if let Some(mut queue) = self.next() {
-                self.buffer.append(&mut queue);
-                count += 1;
-            }
+            completed: BTreeSet::new()
         }
     }
 
     fn has_next(&self) -> bool {
-        self.has_next
+        self.from < self.to || !self.queue.is_empty()
     }
 
-    fn next(&mut self) -> Option<VecDeque<YumFuture<Option<Block>>>> {
-        if !self.has_next {
-            trace!("Items exhausted");
-            None
-        } else {
-            if self.to - self.from < self.chunk_size {
-                trace!("Getting final chunk: {} -> {}", self.from, self.to);
-                let chunk_from = self.from;
-                let chunk_to = self.to;
-                self.from = chunk_to;
-                self.has_next = false;
-                Some(self.build_queue(chunk_from, chunk_to + 1))
+    fn queue_capacity(&self) -> usize {
+        self.buffer_size * self.batch_size as usize
+    }
+
+    fn half_capacity(&self) -> usize {
+        self.queue_capacity() / 2
+    }
+
+    fn remaining_capacity(&self) -> usize {
+        self.queue_capacity() - self.queue.len() - 1
+    }
+
+    fn is_full(&self) -> bool {
+        self.queue_capacity() == self.queue.len()
+    }
+
+    fn next(&mut self) -> Option<YumFuture<Option<Block>>> {
+        debug!("from: {}, to: {}, queue len: {}", self.from, self.to, self.queue.len());
+        if self.from == self.to && self.queue.is_empty() {
+            //We're done with the stream.  Check if any blocks didn't go through.
+            let requested_blocks = (self.start_block..self.to + 1)
+                .into_iter()
+                .collect::<BTreeSet<u64>>();
+            let missing_blocks = requested_blocks
+                .difference(&self.completed)
+                .cloned()
+                .collect::<Vec<u64>>();
+
+            if missing_blocks.is_empty() {
+                return None
             } else {
-                let chunk_from = self.from;
-                let chunk_to = self.from + self.chunk_size;
-                trace!("Getting next chunk: {} -> {}", chunk_from, chunk_to);
-                self.from = chunk_to;
-                let built_queue = self.build_queue(chunk_from, chunk_to);
-                trace!("Have next chunk, length: {}", &built_queue.len());
-                Some(built_queue)
+                debug!("Stream finished, getting missing blocks: {:?}", &missing_blocks);
+                let missing_futs = self.get_blocks(&missing_blocks, self.with_tx);
+                if let YumBatchFuture::Waiting(futs) = missing_futs {
+                    for f in futs {
+                        self.queue.push_back(f);
+                    }
+                }
+                self.queue.pop_front()
             }
+        } else if self.from == self.to && !self.queue.is_empty() {
+            // We're done, but there are a few more items in the queue, finish it out
+            return self.queue.pop_front()
+        } else if self.queue.len() > self.half_capacity() {
+            // Don't start adding more futures until there is a good amount of space
+            // Too little and it negates the benefits of batching requests, too much and
+            // you're waiting unnecessarily for futures to complete since they weren't spawned
+            return self.queue.pop_front()
+        } else {
+            let blocks_left = self.to - self.from;
+            let get_this_many = cmp::min(blocks_left, self.remaining_capacity() as u64);
+
+            let next_futs = self.get_block_range(self.from, self.from + get_this_many, self.with_tx);
+            if let YumBatchFuture::Waiting(futs) = next_futs {
+                for f in futs {
+                    self.queue.push_back(f);
+                }
+            }
+            self.from += get_this_many;
+            self.queue.pop_front()
         }
     }
+
 }
 
-impl BlockOps for BlockStream {
+impl OpSet for BlockStream {
     fn request<T>(
         &self,
         method: &str,
@@ -120,51 +129,31 @@ impl BlockOps for BlockStream {
     }
 }
 
+impl BlockOps for BlockStream { }
+
 impl Stream for BlockStream {
     type Item = Block;
     type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
         trace!("Polling lazy stream");
-        loop {
-            while let Some(mut block_f) = self.queue.pop_front() {
-                if let Async::Ready(block) = block_f.poll()? {
-                    trace!("Next block in lazy stream available");
-                    if let Some(b) = block {
-                        return Ok(Async::Ready(Some(b)));
-                    } else {
-                        return Ok(Async::NotReady)
-                    }
+        while let Some(mut next_item) = self.next() {
+            if let Async::Ready(block) = next_item.poll()? {
+                trace!("Next block in stream available");
+                if let Some(b) = block {
+                    let block_num = b.number.expect("Will always have a number here");
+                    self.completed.insert(block_num);
+                    return Ok(Async::Ready(Some(b)));
                 } else {
-                    trace!("Item not ready, pushing back to queue, remaining: {}", self.queue.len());
-                    self.queue.push_back(block_f);
+                    // if we're here, there was probably a problem decoding the block.
                     return Ok(Async::NotReady)
                 }
-            }
-
-            if self.buffer.is_empty() {
-                if let Some(next_queue) = self.next() {
-                    trace!("Have next queue");
-                    self.queue = next_queue;
-                    if self.has_next() {
-                        self.fill_buffer(5);
-                    } else {
-                        trace!("Lazy stream finished");
-                        return Ok(Async::Ready(None));
-                    }
-                } else {
-                    return Ok(Async::Ready(None));
-                }
             } else {
-                mem::swap(&mut self.queue, &mut self.buffer);
-                if self.has_next() {
-                    self.fill_buffer(10);
-                } else {
-                    if self.queue.is_empty() && self.buffer.is_empty() {
-                        return Ok(Async::Ready(None))
-                    }
-                }
+                // The future isn't done yet, push it back onto the queue and move on.
+                self.queue.push_back(next_item);
+                return Ok(Async::NotReady)
             }
         }
+        Ok(Async::Ready(None))
     }
 }

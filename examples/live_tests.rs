@@ -12,6 +12,7 @@ use futures::Future;
 use ethereum_models::types::{H160, H256, U256};
 use ethereum_models::objects::*;
 use ethereyum::{YumFuture, YumBatchFuture, YumBatchFutureT};
+use ethereyum::ops::{TokenOps};
 use ethereyum::yum::YumClient;
 
 
@@ -20,15 +21,17 @@ use ethereyum::error::Error;
 fn main() {
     pretty_env_logger::init();
 
-    let yum = YumClient::new("ws://127.0.0.1:8546", 1).unwrap();
+    let yum = YumClient::new(&["ws://127.0.0.1:8546"], 1).unwrap();
 
     let latest_block = BlockNumber::Name("latest");
     let contract_address = H160::from_str("8d12A197cB00D4747a1fe03395095ce2A5CC6819").unwrap();
     let non_contract_address = H160::from_str("8330b8d3F5E0322E44cd1A9D9c29c61366d74606").unwrap();
     let classify_both = vec![contract_address.clone(), non_contract_address.clone()];
     let some_valid_block = H256::from_str("2426f0c34c043ac4bde36ee4886ba6c70dcb5cafc570e75ed3aa7a3cdcf2fcea").unwrap();
-    let some_valid_block_num = 5000000_u64;
+    let some_valid_block_num = 4737415u64;
     let some_valid_blocks_non_sequential = vec![4000000_u64, 4500000_u64, 5000001_u64, 3999999_u64];
+    let some_token_address = H160::from_str("f230b790e05390fc8295f4d3f60332c93bed42e2").unwrap();
+    let some_token_holder = H160::from_str("a18ff761a52ce1cb71ab9a19bf4e4b707b388b83").unwrap();
 
     let accounts = {
         match yum.accounts().wait() {
@@ -136,6 +139,51 @@ fn main() {
         }
     };
 
+    let get_token_decimals = {
+        match yum.token_decimals(&some_token_address).wait() {
+            Ok(d) => {
+                if d == 6 {
+                    println!("yum.token_decimals() [decimals: 6] ... {}", Green.paint("passed"))
+                } else {
+                    println!("yum.token_decimals() [decimals: 6] ... {}: expected 6, got {}", Green.paint("passed"), d)
+                }
+            },
+            Err(e) => println!("yum.token_decimals() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
+
+    let get_token_name = {
+        match yum.token_name(&some_token_address).wait() {
+            Ok(s) => {
+                if s == "Tronix".to_string() {
+                    println!("yum.token_name() [name: Tronix] ... {}", Green.paint("passed"))
+                } else {
+                    println!("yum.token_name() [name: Tronix] ... {}: expected Tronix, got {}", Red.paint("failed"), s)
+                }
+            },
+            Err(e) => println!("yum.token_name() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
+
+    let get_token_symbol = {
+        match yum.token_symbol(&some_token_address).wait() {
+            Ok(s) => {
+                if s == "TRX".to_string() {
+                    println!("yum.token_symbol() [TRX] ... {}", Green.paint("passed"))
+                } else {
+                    println!("yum.token_symbol() [TRX] ... {}: expected TRX, got {}", Red.paint("failed"), s)
+                }
+            },
+            Err(e) => println!("yum.token_symbol() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
+
+    let get_token_balance = {
+        match yum.token_get_balance(&some_token_address, &some_token_holder, Some(latest_block)).wait() {
+            Ok(x) => println!("yum.token_get_balance() ... {}: {:?}", Green.paint("passed"), x),
+            Err(e) => println!("yum.token_get_balance() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
 
     std::process::exit(1);
 }

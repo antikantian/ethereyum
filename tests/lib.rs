@@ -99,7 +99,7 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        let mut client = YumClient::new("ws://127.0.0.1:3102", 1)
+        let mut client = YumClient::new(&["ws://127.0.0.1:3102"], 1)
             .expect("Client connection required");
 
         thread::sleep(Duration::from_millis(2000));
@@ -120,7 +120,7 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        let client = YumClient::new("ws://127.0.0.1:3103", 1).expect("Client must start");
+        let client = YumClient::new(&["ws://127.0.0.1:3103"], 1).expect("Client must start");
 
         thread::sleep(Duration::from_millis(2000));
 
@@ -146,7 +146,7 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        let client = YumClient::new("ws://127.0.0.1:3104", 1).expect("Client must start");
+        let client = YumClient::new(&["ws://127.0.0.1:3104"], 1).expect("Client must start");
 
         thread::sleep(Duration::from_millis(2000));
 
@@ -172,7 +172,7 @@ mod yum_tests {
 
         thread::sleep(Duration::from_millis(2000));
 
-        let client = YumClient::new("ws://127.0.0.1:3105", 1).expect("Client must start");
+        let client = YumClient::new(&["ws://127.0.0.1:3105"], 1).expect("Client must start");
 
         thread::sleep(Duration::from_millis(2000));
 
@@ -187,7 +187,31 @@ mod yum_tests {
         assert!(server_thread.join().is_ok());
     }
 
+    #[test]
+    fn handles_unresponsive_host() {
+        thread::sleep(Duration::from_millis(2000));
+        let block_number_hex = "0x4dfbff";
+        let dummy_address = H160::from_str("a94f5374fce5edbc8e2a8697c15331677e6ebf0b").unwrap();
+        let dummy_block = BlockNumber::Name("latest");
+        let (server, server_thread) = setup_websocket(
+            3106, "eth_blockNumber", Value::String(block_number_hex.into())
+        );
 
+        thread::sleep(Duration::from_millis(2000));
+
+        let client = YumClient::new(&["ws://127.0.0.1:3106"], 1).expect("Client must start");
+
+        thread::sleep(Duration::from_millis(2000));
+
+        let block_op = client.block_number().wait().unwrap();
+        assert!(client.is_connected());
+        assert!(server.shutdown().is_ok());
+        assert!(server_thread.join().is_ok());
+
+        thread::sleep(Duration::from_millis(2000));
+
+        assert!(!client.is_connected())
+    }
 
 }
 

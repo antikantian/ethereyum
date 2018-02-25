@@ -4,7 +4,6 @@ extern crate futures;
 extern crate parking_lot;
 extern crate serde_json;
 extern crate pretty_env_logger;
-extern crate tokio;
 extern crate futures_cpupool;
 extern crate web3;
 
@@ -82,29 +81,34 @@ fn main() {
 
     let requests = 1000000;
 
-    let (eloop, ipc) = web3::transports::Ipc::new("/root/.local/share/io.parity.ethereum/jsonrpc.ipc").unwrap();
-    bench_web3("rust-web3:ipc", eloop, ipc, requests);
+//    let (eloop, ipc) = web3::transports::Ipc::new("/root/.local/share/io.parity.ethereum/jsonrpc.ipc").unwrap();
+//    bench_web3("rust-web3:ipc", eloop, ipc, requests);
+//
+//    let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
+//    bench_web3("rust-web3:http", eloop, http, requests);
 
-    let (eloop, http) = web3::transports::Http::new("http://localhost:8545").unwrap();
-    bench_web3("rust-web3:http", eloop, http, requests);
+    let hosts = vec![
+        "208.167.248.41:8546",
+        "127.0.0.1:8546"
+    ];
 
-    let client_1conn = YumClient::new("ws://localhost:8546", 1).unwrap();
+    let client_1conn = YumClient::new(&hosts, 1).unwrap();
     bench_ey("ethereyum:websocket:1-connection", &client_1conn, requests);
 
     drop(client_1conn);
 
-    let client_2conn = YumClient::new("ws://localhost:8546", 2).unwrap();
+    let client_2conn = YumClient::new(&hosts, 2).unwrap();
     bench_ey("ethereyum:websocket:2-connections", &client_2conn, requests);
 
     drop(client_2conn);
 
-    let client_3conn = YumClient::new("ws://localhost:8546", 3).unwrap();
-    bench_ey("ethereyum:websocket:3-connections", &client_3conn, requests);
-
-    drop(client_3conn);
-
-    let client_4conn = YumClient::new("ws://localhost:8546", 4).unwrap();
-    bench_ey("ethereyum:websocket:4-connections", &client_4conn, requests);
+//    let client_3conn = YumClient::new(&hosts, 3).unwrap();
+//    bench_ey("ethereyum:websocket:3-connections", &client_3conn, requests);
+//
+//    drop(client_3conn);
+//
+//    let client_4conn = YumClient::new(&hosts, 4).unwrap();
+//    bench_ey("ethereyum:websocket:4-connections", &client_4conn, requests);
 
     std::process::exit(1);
 }

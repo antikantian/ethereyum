@@ -1,17 +1,19 @@
-use std::{u64, vec};
-use std::collections::{HashMap};
+use std::u64;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ethereum_models::objects::*;
 use ethereum_models::types::{H160, H256, U256};
-use futures::{future, AndThen, Async, Then, Poll, IntoFuture};
+use futures::Future;
+use futures::future::Either;
 use serde::de::{DeserializeOwned};
 use serde::ser::Serialize;
 use serde_json::{self, Value};
+use tokio_timer::Timer;
 
 use error::{Error, ErrorKind};
 use client::{BlockStream, Client, YumBatchFuture, YumFuture};
+use ops::{OpSet, TokenOps};
 
 pub type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
 
@@ -41,22 +43,27 @@ pub struct YumClient {
 }
 
 impl YumClient {
-    pub fn new(host: &str, connections: u32) -> Result<Self, Error> {
-        Client::new(host, connections)
-            .and_then(|c| {
-                let t0 = Instant::now();
-                loop {
-                    if t0.elapsed().as_secs() >= 10 {
-                        return Err(ErrorKind::SocketTimeout(10_u64).into());
-                    }
+    pub fn new(hosts: &[&str], connections: u32) -> Result<Self, Error> {
+        let timeout = Duration::from_secs(5);
+        YumClient::with_timeout(hosts, connections, timeout)
+    }
 
-                    if c.is_connected() {
-                        break;
-                    } else {
-                        continue
+    pub fn with_timeout(hosts: &[&str], connections: u32, timeout: Duration)
+        -> Result<Self, Error>
+    {
+        Client::new(hosts, connections, timeout)
+            .and_then(|c| {
+                let t = Timer::default();
+                let sleep = t.sleep(timeout);
+                let req = c.request("eth_blockNumber", Vec::new(), de_u64);
+                req.select2(sleep).then(|res| {
+                    match res {
+                        Ok(Either::A((_, _))) => Ok(c),
+                        Ok(Either::B((_, _))) => Err(ErrorKind::ConnectionTimeout.into()),
+                        Err(Either::A((e, _))) => Err(e),
+                        Err(Either::B((_, _))) => Err(ErrorKind::ConnectionTimeout.into())
                     }
-                }
-                Ok(c)
+                }).wait()
             })
             .map(|c| YumClient { client: Arc::new(c) })
     }
@@ -75,6 +82,12 @@ impl YumClient {
 
     pub fn block_number(&self) -> YumFuture<u64> {
         self.client.request("eth_blockNumber", Vec::new(), de_u64)
+    }
+
+    pub fn call<T>(&self, call: &TransactionCall) -> YumFuture<T>
+        where T: DeserializeOwned
+    {
+        self.client.request("eth_call", vec![ser(&call)], de::<T>)
     }
 
     pub fn classify_addresses(&self, addresses: Vec<H160>) -> YumBatchFuture<AddressType> {
@@ -255,6 +268,14 @@ impl YumClient {
         self.client.batch_request(requests)
     }
 
+    pub fn is_connected(&self) -> bool {
+        self.client.is_connected()
+    }
+
+    pub fn shutdown(&self) -> Result<(), Error> {
+        self.client.stop()
+    }
+
     #[cfg(feature = "parity")]
     pub fn trace_transaction(&self, tx_hash: &H256) -> YumFuture<Vec<ParityTrace>> {
         self.client.request(
@@ -274,5 +295,26 @@ impl YumClient {
         }
         self.client.batch_request(requests)
     }
-
 }
+
+impl OpSet for YumClient {
+    fn request<T>(
+        &self,
+        method: &str,
+        params: Vec<Value>,
+        de: fn(Value) -> Result<T, Error>) -> YumFuture<T>
+        where T: DeserializeOwned
+    {
+        self.client.request(method, params, de)
+    }
+
+    fn batch_request<T>(
+        &self,
+        req: Vec<(&str, Vec<Value>, Box<Fn(Value) -> Result<T, Error> + Send + Sync>)>)
+        -> YumBatchFuture<T> where T: DeserializeOwned + Send + Sync + 'static
+    {
+        self.client.batch_request(req)
+    }
+}
+
+impl TokenOps for YumClient {}

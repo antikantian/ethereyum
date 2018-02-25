@@ -5,9 +5,9 @@ use futures::{Async, Future, Poll};
 use futures::future::{JoinAll, join_all};
 use futures::sync::oneshot;
 use serde::de::DeserializeOwned;
-use serde_json::{self, Value};
+use serde_json::Value;
 
-use error::{Error, ErrorKind};
+use error::Error;
 
 pub enum YumFuture<T> {
     Waiting(oneshot::Receiver<Result<Value, Error>>, fn(Value) -> Result<T, Error>),
@@ -66,11 +66,6 @@ impl<T> Future for YumFuture<T>
         };
         Ok(Async::NotReady)
     }
-}
-
-pub enum ItemState<T> {
-    Pending(YumFuture<T>),
-    Done(T)
 }
 
 pub enum YumBatchFuture<T: DeserializeOwned + Send + Sync + 'static> {

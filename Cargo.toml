@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["Etherswap.io <admin@etherswap.io>"]
 
 [dependencies]
+chrono = "0.4"
 crossbeam = { version = "0.4.0", git = "https://github.com/crossbeam-rs/crossbeam.git" }
 crossbeam-channel = "0.1"
 crossbeam-deque = "0.3.0"
@@ -13,25 +14,34 @@ fixed-hash = "0.1.2"
 fnv = "1.0.3"
 futures = "0.1"
 futures-cpupool = "0.1"
+hyper = "0.11"
 itertools = "0.7.6"
 jsonrpc-core = "8.0"
 log = "0.4"
 parking_lot = "0.5.3"
 pretty_env_logger = "0.2"
 rayon = "1.0"
+reqwest = "0.8.5"
+rustc-serialize = "0.3"
 serde = "1.0"
 serde_derive = "1.0"
 serde_json = "1.0"
 tokio = "0.1.1"
+tokio-timer = "0.1.2"
+tokio-io = "0.1"
+tokio-threadpool = { version = "0.1.0", git = "https://github.com/tokio-rs/tokio" }
+tokio-core = "0.1"
+tokio-tungstenite = "0.5.1"
+tungstenite = "0.5.3"
 url = "1.6.0"
-ws = "0.7.3"
 
 [dev-dependencies]
 ansi_term = "0.9"
 crossbeam-utils = "0.2"
 jsonrpc-ws-server = { version = "8.0", git = "https://github.com/paritytech/jsonrpc.git" }
-tungstenite = "0.5.3"
+seahash = { version = "3.0.5", git = "https://github.com/ticki/tfs" }
 web3 = { version = "0.2.0", git = "https://github.com/tomusdrw/rust-web3.git" }
+ws = "0.7.3"
 
 [features]
 default = ["parity"]

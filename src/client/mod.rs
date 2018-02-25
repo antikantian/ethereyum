@@ -1,24 +1,28 @@
 mod ops;
 mod result;
 mod stream;
+pub mod tcp;
 
-use std::collections::{HashMap, VecDeque};
-use std::{self, io};
-use std::sync::{self, Arc};
+use std::collections::VecDeque;
+use std::sync::{Arc, self};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::convert::From;
 
+use chrono::{Utc};
 use fnv::FnvHashMap;
-use futures::{Async, Poll, future, Future};
-use futures::future::{JoinAll, join_all};
-use futures::sync::oneshot;
-use parking_lot::{Condvar, Mutex};
+use futures::{Async, Future, IntoFuture, Sink, Stream};
+use futures::sync::{mpsc, oneshot};
+use futures::sync::mpsc::{SendError, TrySendError};
+use futures_cpupool::CpuPool;
+use hyper::header::ContentType;
+use parking_lot::Mutex;
+use reqwest::{Client as HttpClient, StatusCode};
 use rpc::{self, Output};
 use serde::de::DeserializeOwned;
 use serde_json::{self, Value};
-use ws;
+use tokio_timer::Timer;
+use tungstenite::protocol::Message;
 
 use error::{Error, ErrorKind};
 pub use self::ops::BlockOps;
@@ -41,43 +45,55 @@ impl RpcResponse {
 }
 
 type PendingRequests = Arc<Mutex<FnvHashMap<usize, oneshot::Sender<Result<Value, Error>>>>>;
-type PendingRequestCache = Arc<Mutex<FnvHashMap<usize, ws::Message>>>;
+type Timestamps = Arc<Mutex<FnvHashMap<i64, Vec<usize>>>>;
 
 // Using Fowler-Noll-Vo hasher because we're using integer keys and I'm a loser.
 // See: http://cglab.ca/%7Eabeinges/blah/hash-rs/
 // This is probably insignificant since we're not expecting THAT many concurrent requests.
-// How many requests do you think will be in this hashmap before they get
-// removed on response?  Yeah, clearly should have went with:
-// std::collections::ThatHashMapThatMightBeFivePicoSecondsSlower
 pub struct Client {
-    host: String,
+    hosts: Vec<String>,
+    timeout: Duration,
     worker_id: Arc<AtomicUsize>,
     sockets: Arc<Mutex<VecDeque<SocketWorker>>>,
+    http: HttpClient,
     ids: Arc<AtomicUsize>,
     pending: PendingRequests,
+    ts: Timestamps,
+    ts_thread: Option<thread::JoinHandle<()>>,
+    sentinel_thread: Option<thread::JoinHandle<()>>,
+    reconnection_attempts: AtomicUsize
 }
 
 impl Client {
-    pub fn new(host: &str, num_connections: u32) -> Result<Self, Error> {
+    pub fn new(hosts: &[&str], num_connections: u32, timeout: Duration) -> Result<Self, Error> {
         let requests = Arc::new(Mutex::new(FnvHashMap::default()));
-
+        let timestamps = Arc::new(Mutex::new(FnvHashMap::default()));
         let mut client = Client {
-            host: host.to_string(),
+            timeout,
+            hosts: hosts.iter().cloned().map(|h| h.to_string()).collect(),
             worker_id: Arc::new(AtomicUsize::new(0)),
             sockets: Arc::new(Mutex::new(VecDeque::new())),
-            ids: Arc::new(AtomicUsize::new(0)),
+            http: HttpClient::new(),
+            ids: Arc::new(AtomicUsize::new(1)),
             pending: requests,
+            ts: timestamps,
+            ts_thread: None,
+            sentinel_thread: None,
+            reconnection_attempts: AtomicUsize::new(0)
         };
 
-        for _ in 0..num_connections {
-            client.start_connection()?;
+        for host in hosts {
+            for _ in 0..num_connections {
+                client.start_connection(&host)?;
+            }
         }
-
+        client.with_timeout(10);
+        client.with_sentinel();
         Ok(client)
     }
 
     pub fn is_connected(&self) -> bool {
-        self.sockets.lock().iter().any(|worker| !worker.is_closed.load(Ordering::Relaxed))
+        self.sockets.lock().iter().any(|worker| worker.is_connected())
     }
 
     pub fn request<T: DeserializeOwned>(
@@ -92,13 +108,12 @@ impl Client {
         let request = build_request(id, &method, params);
 
         self.pending.lock().insert(id, tx);
+        self.ts.lock().entry(Utc::now().timestamp()).or_insert(Vec::new()).push(id);
 
         let serialized_request = serde_json::to_string(&request)
             .expect("Serialization never fails");
 
-        trace!("Writing request to socket");
-
-        if let Err(_) = self.send(ws::Message::Text(serialized_request.clone())) {
+        if let Err(_) = self.send(SocketRequest::Text(serialized_request.clone())) {
             return YumFuture::Error(ErrorKind::YumError(
                 format!("Couldn't send request: {}", serialized_request)
             ).into());
@@ -130,9 +145,7 @@ impl Client {
         let serialized_batch_calls = serde_json::to_string(&batch_call)
             .expect("Serialization never fails");
 
-        trace!("Writing batch request to socket)");
-
-        if let Err(_) = self.send(ws::Message::Text(serialized_batch_calls)) {
+        if let Err(_) = self.send(SocketRequest::Text(serialized_batch_calls)) {
             return YumBatchFuture::Waiting(responses
                 .into_iter()
                 .map(|_| YumFuture::Error(ErrorKind::YumError("Couldn't send request".into()).into()))
@@ -147,18 +160,12 @@ impl Client {
         YumBatchFuture::Waiting(futs)
     }
 
-    fn start_connection(&mut self) -> Result<(), Error> {
+    fn start_connection(&self, host: &str) -> Result<(), Error> {
         trace!("Client is starting new connection");
 
-        let worker = self.new_socket_worker()?;
-
-        loop {
-            if worker.is_connected() {
-                break
-            } else {
-                continue
-            }
-        }
+        let worker = self.new_socket_worker(host)?;
+        thread::sleep(Duration::from_millis(1000));
+        info!("{}", worker.is_connected());
 
         self.sockets.lock().push_back(worker);
         Ok(())
@@ -168,23 +175,148 @@ impl Client {
         self.ids.fetch_add(1, Ordering::Relaxed)
     }
 
-    fn send(&self, msg: ws::Message) -> Result<(), Error> {
-        let mut worker = self.sockets.lock().pop_front()
-            .ok_or::<Error>(ErrorKind::YumError("No sockets available".into()).into())?;
+    pub fn send_http(&self, msg: String) -> Result<(), Error> {
+        debug!("Sending via http");
+        let mut resp = self.http.post("http://127.0.0.1:8545")
+            .header(ContentType::json())
+            .body(msg)
+            .send()?;
 
-        let _: () = worker.send_request(msg)?;
+        let resp_text = resp.text()?;
 
-        self.sockets.lock().push_back(worker);
+        let decoded_msg = handle_text_message(resp_text);
+
+        if let Ok(rpc_result) = decoded_msg {
+            let mut guard = self.pending.lock();
+
+            for response in rpc_result {
+                let (id, result) = response.into_response();
+
+                if let Some(pending_request) = guard.remove(&id) {
+                    trace!("[Http] Responding to request (id: {})", id);
+                    if let Err(e) = pending_request.send(result) {
+                        warn!("[Http] Receiving end deallocated for response: {:?}", e);
+                    }
+                } else {
+                    warn!("[Http] Unknown request (id: {:?}", id);
+                }
+            }
+        } else {
+            warn!("[Http] Couldn't decode response");
+        }
         Ok(())
     }
 
-    fn new_socket_worker(&self) -> Result<SocketWorker, Error> {
-        let next_worker_id = self.worker_id.fetch_add(1, Ordering::AcqRel);
-        let host = self.host.to_string();
+    fn send(&self, msg: SocketRequest) -> Result<(), Error> {
+        let worker = self.sockets.lock().pop_front();
+        if let Some(w) = worker {
+            match w.send_request(msg) {
+                Ok(()) => {
+                    debug!("Sending via websocket");
+                    self.sockets.lock().push_back(w);
+                    return Ok(())
+                },
+                Err(e) => {
+                    if let SocketRequest::Text(s) = e.into_inner() {
+                        return self.send_http(s)
+                    }
+                    return Ok(())
+                }
+            }
+        } else {
+            if let SocketRequest::Text(s) = msg {
+                return self.send_http(s)
+            }
+        }
+        Ok(())
+    }
+
+    pub fn stop(&self) -> Result<(), Error> {
+        for worker in self.sockets.lock().iter_mut() {
+            worker.stop()?;
+        }
+        Ok(())
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    fn with_sentinel(&mut self) {
+        let workers = self.sockets.clone();
+        let timeout = self.timeout.clone();
+        let th = Some(thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(30));
+                for worker in workers.lock().iter_mut() {
+                    let (tx, rx) = oneshot::channel();
+                    debug!("Sending ping");
+                    match worker.send_request(SocketRequest::Ping(tx)) {
+                        Ok(()) => {
+                            if let Ok(SocketRequest::Pong) = rx.wait() {
+                                debug!("Got pong");
+                                continue
+                            } else {
+                                if let Err(e) = worker.reconnect(&timeout) {
+                                    error!("Couldn't reconnect: {:?}", e);
+                                } else {
+                                    continue
+                                }
+                            }
+                        },
+                        Err(e) => {
+                            error!("Error sending ping: {:?}", e);
+                            if let Err(e) = worker.reconnect(&timeout) {
+                                error!("Couldn't reconnect: {:?}", e);
+                            } else {
+                                continue
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+        self.sentinel_thread = th;
+    }
+
+    fn with_timeout(&mut self, timeout: u64) {
+        let timestamps = self.ts.clone();
+        let pending = self.pending.clone();
+        let th = Some(thread::spawn(move || {
+            loop {
+                thread::sleep(Duration::from_secs(timeout));
+                let now = Utc::now().timestamp();
+                let mut removed = Vec::new();
+
+                for (k, vs) in timestamps.lock().iter() {
+                    if now - *k >= 10 {
+                        for v in vs {
+                            if let Some(f) = pending.lock().remove(v) {
+                                error!("Request timed out (id: {})", v);
+                                removed.push(*v as i64);
+                                f.send(Err(
+                                    ErrorKind::RpcError("Rpc request timed out".into()).into()
+                                )).ok();
+                            }
+                        }
+                    }
+                }
+                for rem in &removed {
+                    timestamps.lock().remove(&rem);
+                }
+                removed.clear();
+            }
+        }));
+        self.ts_thread = th;
+    }
+
+    fn new_socket_worker(&self, host: &str) -> Result<SocketWorker, Error> {
+        let next_worker_id = self.worker_id.fetch_add(1, Ordering::Relaxed);
+        let host = host.to_string();
         let pending = self.pending.clone();
 
         trace!("Client is starting new socket worker: (id: {}, host: {})", &next_worker_id, &host);
-        let worker = SocketWorker::new(next_worker_id, &host, pending)?;
+        let worker = SocketWorker::new(next_worker_id, &host, pending, &self.timeout)?;
 
         Ok(worker)
     }
@@ -198,321 +330,223 @@ impl Drop for Client {
     }
 }
 
-pub enum WorkerRequest {
-    Message(ws::Message),
-    Close(ws::CloseCode),
-    Shutdown
+pub enum SocketRequest {
+    Text(String),
+    Binary(Vec<u8>),
+    ConnectedStatus(oneshot::Sender<bool>),
+    Ping(oneshot::Sender<SocketRequest>),
+    Pong,
+    Stop
 }
 
 struct SocketWorker {
-    tx: ws::Sender,
-    is_closed: Arc<AtomicBool>,
-    is_shutdown: Arc<AtomicBool>,
-    requests: PendingRequests,
-    request_cache: PendingRequestCache,
-    thread: Option<thread::JoinHandle<()>>,
+    id: usize,
+    host: String,
+    tx: mpsc::UnboundedSender<SocketRequest>,
+    pending: PendingRequests,
+    thread: Option<thread::JoinHandle<()>>
 }
 
 impl SocketWorker {
-    pub fn new(id: usize, host: &str, pending: PendingRequests)
+    pub fn new(id: usize, host: &str, pending: PendingRequests, timeout: &Duration)
         -> Result<Self, Error>
     {
-        let cache = Arc::new(Mutex::new(FnvHashMap::default()));
         info!("Attempting to open new socket with id: {}, connecting to: {}", &id, &host);
-        let (ws_tx, closed, shutdown, rc, ws_thread) = SocketWorker::start(
-            id, host, pending.clone(), cache.clone()
-        )?;
+        let (ws_tx, th) = SocketWorker::connect(id, host, pending.clone(), &timeout)?;
 
         Ok(SocketWorker {
+            id,
+            host: host.to_string(),
             tx: ws_tx,
-            is_closed: closed,
-            is_shutdown: shutdown,
-            requests: pending,
-            request_cache: cache,
-            thread: Some(ws_thread),
+            pending,
+            thread: Some(th)
         })
     }
 
     pub fn is_connected(&self) -> bool {
-        !self.is_closed.load(Ordering::Relaxed)
-    }
-
-    pub fn send_request(&mut self, req: ws::Message) -> Result<(), Error> {
-        if !self.is_closed.load(Ordering::Relaxed) {
-            return self.tx.send(req).map_err(Into::into);
+        if self.thread.is_none() {
+            debug!("Socket-{} has no thread", self.id);
+            return false
         } else {
-            // Socket is presumably abnormally disconnected
-            if let Err(e) = self.replace_connection() {
-                error!("Error replacing socket connection: {:?}", e);
-            } else {
-                let cache_guard = self.request_cache.lock();
-                for v in cache_guard.values() {
-                    if let Err(e) = self.tx.send(v.clone()) {
-                        error!("Error resending cached requests: {:?}", e);
-                    }
-                }
+            let (tx, rx) = oneshot::channel();
+            match self.send_request(SocketRequest::ConnectedStatus(tx)) {
+                Err(e) => {
+                    debug!("Socket-{} disconnected: {:?}", self.id, e);
+                    false
+                },
+                Ok(_) => rx.wait().expect("Status rx")
             }
         }
-        Ok(())
     }
 
-    pub fn stop(&self) -> Result<(), Error> {
-        if let Err(e) = self.tx.close(ws::CloseCode::Normal) {
-            error!("Couldn't close websocket: {:?}", e);
+    pub fn reconnect(&mut self, timeout: &Duration) -> Result<(), Error> {
+        debug!("Attempting to reconnect to socket-{}", self.id);
+        if self.is_connected() {
+            return Ok(())
+        } else {
+            self.thread = None;
+            //self.thread.take().and_then(|th| th.join().ok());
+            let (new_tx, new_thread) = SocketWorker::connect(
+                self.id, &self.host, self.pending.clone(), &timeout
+            )?;
+            self.tx = new_tx;
+            self.thread = Some(new_thread);
+            let t0 = Instant::now();
+            while t0.elapsed() <= *timeout {
+                if self.is_connected() {
+                    debug!("Reconnection of socket-{} successful", self.id);
+                    return Ok(())
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(ErrorKind::ConnectError.into())
         }
-        if let Err(e) = self.tx.shutdown() {
-            error!("Couldn't shutdown websocket: {:?}", e);
-        }
+    }
+
+    pub fn send_request(&self, req: SocketRequest) -> Result<(), SendError<SocketRequest>> {
+        self.tx.unbounded_send(req)
+    }
+
+    pub fn stop(&mut self) -> Result<(), Error> {
+        self.send_request(SocketRequest::Stop)?;
+        self.thread.take().expect("is only called once").join().expect("thread shuts down");
         Ok(())
     }
 
-    pub fn replace_connection(&mut self) -> Result<(), Error> {
-//        if let Err(e) = self.tx.shutdown() {
-//            error!("failed to shut down socket");
-//        }
-//        if let Some(old_thread) = self.thread.take() {
-//            old_thread.join().expect("thread shuts down");
-//        }
-        let (tx, th) = SocketWorker::get_connection(
-            "ws://127.0.0.1:8546",
-            self.requests.clone(),
-            self.request_cache.clone(),
-            self.is_closed.clone(),
-            self.is_shutdown.clone()
-        )?;
-
-        self.tx = tx;
-        self.thread = Some(th);
-        Ok(())
-    }
-
-    fn start(id: usize, host: &str, pending: PendingRequests, cache: PendingRequestCache)
-             -> Result<(
-                 ws::Sender, Arc<AtomicBool>, Arc<AtomicBool>,
-                 Arc<(Mutex<bool>, Condvar)>, thread::JoinHandle<()>
-             ), Error>
+    fn connect(
+        id: usize,
+        host: &str,
+        pending: PendingRequests,
+        timeout: &Duration)
+        -> Result<(mpsc::UnboundedSender<SocketRequest>, thread::JoinHandle<()>), Error>
     {
         let trace_id = format!("[socket-worker-{} -> {}]", &id, &host);
         trace!("{} starting up...", &trace_id);
 
-        let host = host.to_string();
+        let host = host.replace("ws://", "");
+        let host = host.replace("/", "");
 
-        let closed_status = Arc::new(AtomicBool::new(true));
-        let shutdown_status = Arc::new(AtomicBool::new(true));
-        let needs_reconnect = Arc::new((Mutex::new(false), Condvar::new()));
+        let (tx, rx) = mpsc::unbounded();
+        let rx = rx.map_err(|_| panic!()); // Errors not possible on receiving end
+        let pending = pending.clone();
+        let (conn_tx, mut conn_rx) = sync::mpsc::sync_channel(0);
 
-        let (socket_sender, socket_thread) = SocketWorker::get_connection(
-            &host, pending.clone(), cache.clone(), closed_status.clone(),
-            shutdown_status.clone()
-        )?;
+        let socket_thread = thread::spawn(move || {
+            let client = tcp::connect_async(&host).and_then(|(ws, _)| {
+                info!("Socket stream connected");
+                conn_tx.send(true).unwrap();
 
-        Ok((socket_sender, closed_status, shutdown_status, needs_reconnect, socket_thread))
-    }
+                let (mut sink, stream) = ws.split();
 
-    fn get_connection(
-        host: &str,
-        pending: PendingRequests,
-        cache: PendingRequestCache,
-        closed_status: Arc<AtomicBool>,
-        shutdown_status: Arc<AtomicBool>)
-        -> Result<(ws::Sender, thread::JoinHandle<()>), Error>
-    {
-        trace!("connecting to host: {:?}", &host);
+                let write_stream = rx
+                    .take_while(|req| {
+                        if let &SocketRequest::Stop = req {
+                            Ok(false)
+                        } else {
+                            Ok(true)
+                        }
+                    })
+                    .filter_map(|req| {
+                        match req {
+                            SocketRequest::Text(s) => Some(Message::Text(s)),
+                            SocketRequest::Binary(b) => Some(Message::Binary(b)),
+                            SocketRequest::Ping(ping_tx) => {
+                                if let Err(e) = ping_tx.send(SocketRequest::Pong) {
+                                    error!("Error sending connection pong");
+                                }
+                                None
+                            }
+                            SocketRequest::Pong => None,
+                            SocketRequest::ConnectedStatus(status_tx) => {
+                                if let Err(e) = status_tx.send(true) {
+                                    error!("Error sending connection status: {:?}", e);
+                                }
+                                None
+                            }
+                            SocketRequest::Stop => None
+                        }
+                    })
+                    .for_each(move |msg| {
+                        debug!("Sending message to socket");
+                        if let Err(e) = sink.start_send(msg) {
+                            error!("Error writing request to socket: {:?}", e);
+                        }
+                        Ok(())
+                    });
 
-        let (tx, rx) = sync::mpsc::channel();
-        let h = host.to_string();
+                    let read_stream = stream
+                        .for_each(|msg| {
+                            debug!("Received message from socket");
 
-        let c_status = closed_status.clone();
+                            let decoded_msg = handle_message(msg);
 
-        let ws_thread = thread::Builder::new().spawn(move || {
-            trace!("entering actual websocket connection thread");
-            ws::connect(h.clone(), |out| {
-                trace!("in ws-rs connection closure");
-                let sc_out = out.clone();
-                // get write handle out of closure
-                tx.send(out).unwrap();
+                            if let &Err(ref e) = &decoded_msg {
+                                error!("{:?}", e)
+                            }
 
-                SocketConnection {
-                    rx: sc_out,
-                    is_closed: closed_status.clone(),
-                    is_shutdown: shutdown_status.clone(),
-                    pending: pending.clone(),
-                    cache: cache.clone()
-                }
-            }).expect(&format!("Couldn't connect to {}", &h));
-        }).expect("Threads needs to spawn");
+                            if let Ok(rpc_result) = decoded_msg {
+                                let mut guard = pending.lock();
 
-        let mut iter_count = 0;
+                                for response in rpc_result {
+                                    let (id, result) = response.into_response();
 
-        loop {
-            iter_count += 1;
+                                    if let Some(pending_request) = guard.remove(&id) {
+                                        trace!("Responding to request (id: {})", id);
+                                        if let Err(e) = pending_request.send(result) {
+                                            warn!("Receiving end deallocated for response: {:?}", e);
+                                        }
+                                    } else {
+                                        warn!("Unknown request (id: {:?}", id);
+                                    }
+                                }
+                            } else {
+                                warn!("Couldn't decode response");
+                            }
+                            Ok(())
+                        });
 
-            // 5 secs
-            if iter_count > 50 {
-                return Err(
-                    ErrorKind::YumError(format!("Couldn't connect to host: {}", &host)).into()
-                );
+                    write_stream
+                        .map(|_| ())
+                        .select(read_stream.map(|_| ()))
+                        .then(|_| {
+                            Ok(())
+                        })
+                });
+            if let Err(e) = client.wait() {
+                debug!("Socket error: {:?}", e);
             }
+        });
 
-            if c_status.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(100));
-                continue
-            } else {
-                info!("Socket connection open");
-                break
-            }
-        }
-
-        let socket_tx = rx.recv().expect("Couldn't get ws socket handle");
-        Ok((socket_tx, ws_thread))
-    }
-
-
-}
-
-impl Drop for SocketWorker {
-    fn drop(&mut self) {
-        if let Err(e) = self.tx.shutdown() {
-            warn!("Error shutting down websocket: {:?}", e);
-        }
-
-        self.thread
-            .take()
-            .expect("Thread is only dropped once")
-            .join()
-            .expect("Socket thread shuts down properly");
-    }
-}
-
-struct SocketConnection {
-    rx: ws::Sender,
-    is_closed: Arc<AtomicBool>,
-    is_shutdown: Arc<AtomicBool>,
-    pending: PendingRequests,
-    cache: PendingRequestCache
-}
-
-impl ws::Handler for SocketConnection {
-    fn on_open(&mut self, _: ws::Handshake) -> Result<(), ws::Error> {
-        info!("Websocket connection open");
-        self.is_shutdown.store(false, Ordering::Relaxed);
-        self.is_closed.store(false, Ordering::Relaxed);
-        Ok(())
-    }
-
-    fn on_close(&mut self, close: ws::CloseCode, reason: &str) {
-        use ws::CloseCode::*;
-        match close {
-            Normal => {
-                info!("Websocket closing normally");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            Away => {
-                info!("Websocket is going away");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            Protocol => {
-                info!("Websocket closing due to protocol error");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            Status => {
-                info!("Websocket is closing, no status code reported");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            Abnormal => {
-                info!("Websocket is closing abnormally, attempting reconnection");
-                self.is_closed.store(true, Ordering::Relaxed);
-            },
-            Size => {
-                info!("Websocket is closing due to receiving an oversized message");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            Error => {
-                info!("Websocket is closing due to an error on the server");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            Restart => {
-                info!("Websocket is closing due to a server restart");
-                self.is_closed.store(true, Ordering::Relaxed)
-            },
-            _ => {
-                info!("Websocket is closing for an unknown reason: {}", reason);
-                self.is_closed.store(true, Ordering::Relaxed)
+        let t0 = Instant::now();
+        while t0.elapsed() <= *timeout {
+            if let Ok(true) = conn_rx.try_recv() {
+                return Ok((tx, socket_thread))
             }
         }
-    }
-
-    fn on_shutdown(&mut self) {
-        info!("Websocket shutdown");
-        self.is_shutdown.store(true, Ordering::Relaxed);
-    }
-
-    fn on_message(&mut self, msg: ws::Message) -> Result<(), ws::Error> {
-        let decoded_msg = match msg.clone() {
-            ws::Message::Text(resp) => handle_text_message(resp),
-            ws::Message::Binary(resp) => handle_binary_message(resp),
-
-            _ => Err(ErrorKind::RpcError("Invalid socket response".into()).into()),
-        };
-
-        if let Ok(rpc_result) = decoded_msg {
-            let mut guard = self.pending.lock();
-            let mut guard_cache = self.cache.lock();
-
-            for response in rpc_result {
-                let (id, result) = response.into_response();
-
-                if let Some(pending_request) = guard.remove(&id) {
-                    trace!("Responding to request (id: {})", id);
-                    guard_cache.remove(&id);
-                    if let Err(e) = pending_request.send(result) {
-                        warn!("Receiving end deallocated for response: {:?}", e);
-                    }
-                } else {
-                    warn!("Unknown request (id: {:?}", id);
-                }
-            }
-        } else {
-            warn!("Couldn't decode response: {:?}", msg);
-        }
-        Ok(())
+        Err(ErrorKind::ConnectError.into())
     }
 }
 
-enum MessageState {
-    InFlight(Option<Result<(), Error>>, oneshot::Receiver<Result<Value, Error>>),
-    Waiting(oneshot::Receiver<Result<Value, Error>>),
-    Complete
-}
+//impl Drop for SocketWorker {
+//    fn drop(&mut self) {
+//        if let Err(e) = self.tx.shutdown() {
+//            warn!("Error shutting down websocket: {:?}", e);
+//        }
+//
+//        self.thread
+//            .take()
+//            .expect("Thread is only dropped once")
+//            .join()
+//            .expect("Socket thread shuts down properly");
+//    }
+//}
 
-pub struct ClientResponse {
-    id: usize,
-    state: MessageState
-}
-
-impl ClientResponse {
-    pub fn new(
-        id: usize,
-        send_status: Result<(), Error>,
-        rx: oneshot::Receiver<Result<Value, Error>>) -> Self
-    {
-        ClientResponse {
-            id,
-            state: MessageState::InFlight(Some(send_status), rx)
-        }
-    }
-}
-
-fn call_to_message(rpc_call: rpc::Call) -> ws::Message {
-    let call = serde_json::to_string(&rpc_call)
-        .expect("Serialization of a call should never fail");
-    ws::Message::Text(call)
-}
-
-fn handle_message(msg: ws::Message) -> Result<Vec<RpcResponse>, Error> {
+fn handle_message(msg: Message) -> Result<Vec<RpcResponse>, Error> {
     match msg {
-        ws::Message::Text(response) => handle_text_message(response),
-        ws::Message::Binary(response) => handle_binary_message(response)
+        Message::Text(response) => handle_text_message(response),
+        Message::Binary(response) => handle_binary_message(response),
+        Message::Ping(_) => unreachable!(),
+        Message::Pong(_) => unreachable!()
     }
 }
 
