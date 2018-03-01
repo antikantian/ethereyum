@@ -1,5 +1,6 @@
 #![recursion_limit="128"]
 
+extern crate bigdecimal;
 extern crate chrono;
 extern crate crossbeam;
 
@@ -20,6 +21,7 @@ extern crate futures_cpupool;
 extern crate hyper;
 extern crate itertools;
 extern crate jsonrpc_core as rpc;
+extern crate num;
 extern crate parking_lot;
 extern crate rayon;
 extern crate reqwest;

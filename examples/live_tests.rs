@@ -185,5 +185,12 @@ fn main() {
         }
     };
 
+    let convert_token_amount = {
+        match yum.token_amount_in_eth(&some_token_address, U256::from(50000)).wait() {
+            Ok(x) => println!("yum.token_amount_in_eth() ... {}: {:?}", Green.paint("passed"), x),
+            Err(e) => println!("yum.token_amount_in_eth() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
+
     std::process::exit(1);
 }
