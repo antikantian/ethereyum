@@ -1,9 +1,11 @@
 mod block;
 mod erc20;
+mod pubsub;
 mod transaction;
 
 pub use self::block::BlockOps;
 pub use self::erc20::TokenOps;
+pub use self::pubsub::PubsubOps;
 pub use self::transaction::TransactionOps;
 
 use std::str;

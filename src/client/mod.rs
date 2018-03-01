@@ -29,6 +29,7 @@ use tungstenite::protocol::Message;
 
 use error::{Error, ErrorKind};
 use yum::de_u64;
+
 pub use self::ops::BlockOps;
 pub use self::result::{YumBatchFuture, YumBatchFutureT, YumFuture};
 pub use self::stream::{BlockStream};

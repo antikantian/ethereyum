@@ -16,7 +16,7 @@ use tokio_timer::Timer;
 
 use error::{Error, ErrorKind};
 use client::{BlockStream, Client, Pubsub, TransactionStream, YumBatchFuture, YumFuture};
-use ops::{OpSet, TokenOps};
+use ops::{OpSet, PubsubOps, TokenOps};
 
 pub type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
 
@@ -290,19 +290,6 @@ impl YumClient {
         self.client.stop()
     }
 
-    pub fn subscribe<T>(&self, params: Vec<Value>, op: fn(Value) -> Result<T, Error>) -> Pubsub<T>
-        where T: DeserializeOwned
-    {
-        let (tx, rx) = mpsc::unbounded();
-        let id_fut = self.client.request("parity_subscribe", params, de_usize);
-        Pubsub::new(id_fut, self.client.clone(), rx, Some(tx), op)
-    }
-
-    pub fn new_block_stream(&self) -> Pubsub<u64> {
-        let params = vec![ser(&"eth_blockNumber".to_string()), ser::<Vec<Value>>(&vec![])];
-        self.subscribe(params, de_u64)
-    }
-
     #[cfg(feature = "parity")]
     pub fn trace_transaction(&self, tx_hash: &H256) -> YumFuture<Vec<ParityTrace>> {
         self.client.request(
@@ -341,6 +328,12 @@ impl OpSet for YumClient {
         -> YumBatchFuture<T> where T: DeserializeOwned + Send + Sync + 'static
     {
         self.client.batch_request(req)
+    }
+}
+
+impl PubsubOps for YumClient {
+    fn get_client(&self) -> Arc<Client> {
+        self.client.clone()
     }
 }
 

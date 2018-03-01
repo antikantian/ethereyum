@@ -10,6 +10,7 @@ use std::time::Duration;
 use futures::prelude::*;
 use ethereum_models::objects::*;
 use ethereyum::client::{Client, Pubsub};
+use ethereyum::ops::PubsubOps;
 use ethereyum::yum::{YumClient};
 use ethereyum::error::Error;
 
@@ -18,10 +19,10 @@ fn main() {
 
     let client = YumClient::new(&["ws://127.0.0.1:8546"], 1).unwrap();
 
-    let bstream = client.new_block_stream();
+    let bstream = client.new_blocks_with_tx();
 
     let res = bstream.for_each(|block| {
-        println!("New block {}", block);
+        println!("New block {:?}", block);
         Ok(())
     }).wait();
 
