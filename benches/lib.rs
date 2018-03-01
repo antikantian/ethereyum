@@ -84,4 +84,3 @@ fn siphash_1_byte(b: &mut test::Bencher) { siphash_bench(b, 1) }
 
 #[bench]
 fn siphash_0_byte(b: &mut test::Bencher) { siphash_bench(b, 0) }
-

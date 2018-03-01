@@ -39,6 +39,7 @@ url = "1.6.0"
 ansi_term = "0.9"
 crossbeam-utils = "0.2"
 jsonrpc-ws-server = { version = "8.0", git = "https://github.com/paritytech/jsonrpc.git" }
+pbr = "1.0.0"
 seahash = { version = "3.0.5", git = "https://github.com/ticki/tfs" }
 web3 = { version = "0.2.0", git = "https://github.com/tomusdrw/rust-web3.git" }
 ws = "0.7.3"

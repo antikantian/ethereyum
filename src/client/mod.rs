@@ -1,15 +1,18 @@
 mod ops;
 mod result;
 mod stream;
+mod streaming;
 pub mod tcp;
 
-use std::collections::VecDeque;
+use std::usize;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, self};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{Utc};
+use fixed_hash::clean_0x;
 use fnv::FnvHashMap;
 use futures::{Async, Future, IntoFuture, Sink, Stream};
 use futures::sync::{mpsc, oneshot};
@@ -19,18 +22,34 @@ use hyper::header::ContentType;
 use parking_lot::Mutex;
 use reqwest::{Client as HttpClient, StatusCode};
 use rpc::{self, Output};
-use serde::de::DeserializeOwned;
+use serde::de::{self, Deserialize, Deserializer, DeserializeOwned};
 use serde_json::{self, Value};
 use tokio_timer::Timer;
 use tungstenite::protocol::Message;
 
 use error::{Error, ErrorKind};
+use yum::de_u64;
 pub use self::ops::BlockOps;
 pub use self::result::{YumBatchFuture, YumBatchFutureT, YumFuture};
 pub use self::stream::{BlockStream};
+pub use self::streaming::{Pubsub, TransactionStream};
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct Notification {
+    method: String,
+    params: SubscriptionUpdate
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct SubscriptionUpdate {
+    #[serde(deserialize_with="usize_from_str")]
+    subscription: usize,
+    result: Value
+}
 
 #[derive(Debug)]
 pub enum RpcResponse {
+    Subscription { id: usize, result: Value },
     Success { id: usize, result: Value },
     Failure { id: usize, result: Error }
 }
@@ -38,6 +57,7 @@ pub enum RpcResponse {
 impl RpcResponse {
     pub fn into_response(self) -> (usize, Result<Value, Error>) {
         match self {
+            RpcResponse::Subscription { id, result } => (id, Ok(result)),
             RpcResponse::Success { id, result } => (id, Ok(result)),
             RpcResponse::Failure { id, result } => (id, Err(result))
         }
@@ -45,11 +65,16 @@ impl RpcResponse {
 }
 
 type PendingRequests = Arc<Mutex<FnvHashMap<usize, oneshot::Sender<Result<Value, Error>>>>>;
+type Subscriptions = Arc<Mutex<HashMap<usize, mpsc::UnboundedSender<Value>>>>;
 type Timestamps = Arc<Mutex<FnvHashMap<i64, Vec<usize>>>>;
 
-// Using Fowler-Noll-Vo hasher because we're using integer keys and I'm a loser.
+// Using Fowler-Noll-Vo hasher because we're using small-ish integer keys and I'm a loser.
 // See: http://cglab.ca/%7Eabeinges/blah/hash-rs/
-// This is probably insignificant since we're not expecting THAT many concurrent requests.
+// Could also go with Seahash here I guess.  At any rate, this is probably insignificant
+// since we're not expecting THAT many concurrent requests.
+// fnvhash_8_byte  ...  bench: 11 ns/iter (+/- 2) = 727 MB/s
+// seahash_8_byte  ...  bench: 10 ns/iter (+/- 2) = 800 MB/s
+// siphash_8_byte  ...  bench: 12 ns/iter (+/- 0) = 666 MB/s
 pub struct Client {
     hosts: Vec<String>,
     timeout: Duration,
@@ -58,6 +83,7 @@ pub struct Client {
     http: HttpClient,
     ids: Arc<AtomicUsize>,
     pending: PendingRequests,
+    subscriptions: Subscriptions,
     ts: Timestamps,
     ts_thread: Option<thread::JoinHandle<()>>,
     sentinel_thread: Option<thread::JoinHandle<()>>,
@@ -67,6 +93,7 @@ pub struct Client {
 impl Client {
     pub fn new(hosts: &[&str], num_connections: u32, timeout: Duration) -> Result<Self, Error> {
         let requests = Arc::new(Mutex::new(FnvHashMap::default()));
+        let subs = Arc::new(Mutex::new(HashMap::new()));
         let timestamps = Arc::new(Mutex::new(FnvHashMap::default()));
         let mut client = Client {
             timeout,
@@ -76,6 +103,7 @@ impl Client {
             http: HttpClient::new(),
             ids: Arc::new(AtomicUsize::new(1)),
             pending: requests,
+            subscriptions: subs,
             ts: timestamps,
             ts_thread: None,
             sentinel_thread: None,
@@ -158,6 +186,10 @@ impl Client {
             .collect::<Vec<YumFuture<T>>>();
 
         YumBatchFuture::Waiting(futs)
+    }
+
+    pub fn add_subscription(&self, id: usize, tx: mpsc::UnboundedSender<Value>) {
+        self.subscriptions.lock().insert(id, tx);
     }
 
     fn start_connection(&self, host: &str) -> Result<(), Error> {
@@ -316,7 +348,9 @@ impl Client {
         let pending = self.pending.clone();
 
         trace!("Client is starting new socket worker: (id: {}, host: {})", &next_worker_id, &host);
-        let worker = SocketWorker::new(next_worker_id, &host, pending, &self.timeout)?;
+        let worker = SocketWorker::new(
+            next_worker_id, &host, pending, self.subscriptions.clone(), &self.timeout
+        )?;
 
         Ok(worker)
     }
@@ -344,21 +378,29 @@ struct SocketWorker {
     host: String,
     tx: mpsc::UnboundedSender<SocketRequest>,
     pending: PendingRequests,
+    subscriptions: Subscriptions,
     thread: Option<thread::JoinHandle<()>>
 }
 
 impl SocketWorker {
-    pub fn new(id: usize, host: &str, pending: PendingRequests, timeout: &Duration)
-        -> Result<Self, Error>
+    pub fn new(
+        id: usize,
+        host: &str,
+        pending: PendingRequests,
+        subscriptions: Subscriptions,
+        timeout: &Duration) -> Result<Self, Error>
     {
         info!("Attempting to open new socket with id: {}, connecting to: {}", &id, &host);
-        let (ws_tx, th) = SocketWorker::connect(id, host, pending.clone(), &timeout)?;
+        let (ws_tx, th) = SocketWorker::connect(
+            id, host, pending.clone(), subscriptions.clone(), &timeout
+        )?;
 
         Ok(SocketWorker {
             id,
             host: host.to_string(),
             tx: ws_tx,
             pending,
+            subscriptions,
             thread: Some(th)
         })
     }
@@ -387,7 +429,7 @@ impl SocketWorker {
             self.thread = None;
             //self.thread.take().and_then(|th| th.join().ok());
             let (new_tx, new_thread) = SocketWorker::connect(
-                self.id, &self.host, self.pending.clone(), &timeout
+                self.id, &self.host, self.pending.clone(), self.subscriptions.clone(), &timeout
             )?;
             self.tx = new_tx;
             self.thread = Some(new_thread);
@@ -417,6 +459,7 @@ impl SocketWorker {
         id: usize,
         host: &str,
         pending: PendingRequests,
+        subscriptions: Subscriptions,
         timeout: &Duration)
         -> Result<(mpsc::UnboundedSender<SocketRequest>, thread::JoinHandle<()>), Error>
     {
@@ -429,6 +472,7 @@ impl SocketWorker {
         let (tx, rx) = mpsc::unbounded();
         let rx = rx.map_err(|_| panic!()); // Errors not possible on receiving end
         let pending = pending.clone();
+        let subscriptions = subscriptions.clone();
         let (conn_tx, mut conn_rx) = sync::mpsc::sync_channel(0);
 
         let socket_thread = thread::spawn(move || {
@@ -476,7 +520,7 @@ impl SocketWorker {
 
                     let read_stream = stream
                         .for_each(|msg| {
-                            debug!("Received message from socket");
+                            trace!("Received message from socket");
 
                             let decoded_msg = handle_message(msg);
 
@@ -488,15 +532,26 @@ impl SocketWorker {
                                 let mut guard = pending.lock();
 
                                 for response in rpc_result {
-                                    let (id, result) = response.into_response();
-
-                                    if let Some(pending_request) = guard.remove(&id) {
-                                        trace!("Responding to request (id: {})", id);
-                                        if let Err(e) = pending_request.send(result) {
-                                            warn!("Receiving end deallocated for response: {:?}", e);
-                                        }
-                                    } else {
-                                        warn!("Unknown request (id: {:?}", id);
+                                    match response {
+                                        RpcResponse::Subscription { id, result } => {
+                                            if let Some(sub) = subscriptions.lock().get_mut(&id) {
+                                                if let Err(_) = sub.unbounded_send(result) {
+                                                    error!("Couldn't notify subscriber");
+                                                }
+                                            }
+                                        },
+                                        other_response => {
+                                            let (id, result) = other_response.into_response();
+                                            if let Some(pending_request) = guard.remove(&id) {
+                                                trace!("Responding to request (id: {})", &id);
+                                                if let Err(e) = pending_request.send(result) {
+                                                    warn!("Receiving end deallocated: {:?}", e);
+                                                }
+                                                trace!("Responded successfully to (id: {})", &id);
+                                            } else {
+                                                warn!("Unknown request (id: {:?}", id);
+                                            }
+                                        },
                                     }
                                 }
                             } else {
@@ -551,9 +606,21 @@ fn handle_message(msg: Message) -> Result<Vec<RpcResponse>, Error> {
 }
 
 fn handle_text_message(text: String) -> Result<Vec<RpcResponse>, Error> {
-    serde_json::from_str::<rpc::Response>(&text)
-        .map_err(Into::into)
-        .and_then(|resp| handle_response(resp))
+    match serde_json::from_str::<rpc::Response>(&text) {
+        Ok(resp) => handle_response(resp),
+        Err(_) => {
+            match serde_json::from_str::<Notification>(&text) {
+                Ok(sub) => {
+                    let r = RpcResponse::Subscription {
+                        id: sub.params.subscription,
+                        result: sub.params.result
+                    };
+                    Ok(vec![r])
+                },
+                Err(e) => Err(e.into())
+            }
+        }
+    }
 }
 
 fn handle_binary_message(binary: Vec<u8>) -> Result<Vec<RpcResponse>, Error> {
@@ -618,5 +685,12 @@ pub fn build_request(id: usize, method: &str, params: Vec<Value>) -> rpc::Call {
         params: Some(rpc::Params::Array(params)),
         id: rpc::Id::Num(id as u64)
     })
+}
+
+fn usize_from_str<'de, D>(deserializer: D) -> Result<usize, D::Error>
+    where D: Deserializer<'de>
+{
+    let s = String::deserialize(deserializer)?;
+    usize::from_str_radix(clean_0x(&s), 16).map_err(de::Error::custom)
 }
 

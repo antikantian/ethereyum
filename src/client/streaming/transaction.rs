@@ -5,44 +5,37 @@ use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use ethereum_models::objects::Block;
+use ethereum_models::objects::Transaction;
+use ethereum_models::types::H256;
 use futures::{Async, Future, Stream};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use client::{Client, YumFuture, YumBatchFuture};
 use error::{Error, ErrorKind};
-use ops::{BlockOps, OpSet};
+use ops::{OpSet, TransactionOps};
 
-pub struct BlockStream {
-    start_block: u64,
-    from: u64,
-    to: u64,
+pub struct TransactionStream {
+    tx_list: VecDeque<H256>,
     buffer_size: usize,
     batch_size: u64,
-    with_tx: bool,
-    queue: VecDeque<(Instant, YumFuture<Option<Block>>)>,
-    completed: BTreeSet<u64>,
+    queue: VecDeque<(Instant, YumFuture<Option<Transaction>>)>,
     client: Arc<Client>
 }
 
-impl BlockStream {
-    pub fn new(client: Arc<Client>, from: u64, to: u64, with_tx: bool) -> Self {
-        BlockStream {
-            start_block: from,
-            from,
-            to,
+impl TransactionStream {
+    pub fn new(client: Arc<Client>, txns: VecDeque<H256>) -> Self {
+        TransactionStream {
             client,
-            with_tx,
+            tx_list: txns,
             batch_size: 10,
             buffer_size: 5,
-            queue: VecDeque::new(),
-            completed: BTreeSet::new()
+            queue: VecDeque::new()
         }
     }
 
     fn has_next(&self) -> bool {
-        self.from < self.to || !self.queue.is_empty()
+        !self.tx_list.is_empty()
     }
 
     fn queue_capacity(&self) -> usize {
@@ -61,31 +54,10 @@ impl BlockStream {
         self.queue_capacity() == self.queue.len()
     }
 
-    fn next(&mut self) -> Option<(Instant, YumFuture<Option<Block>>)> {
-        debug!("from: {}, to: {}, queue len: {}", self.from, self.to, self.queue.len());
-        if self.from == self.to && self.queue.is_empty() {
-            //We're done with the stream.  Check if any blocks didn't go through.
-            let requested_blocks = (self.start_block..self.to + 1)
-                .into_iter()
-                .collect::<BTreeSet<u64>>();
-            let missing_blocks = requested_blocks
-                .difference(&self.completed)
-                .cloned()
-                .collect::<Vec<u64>>();
-
-            if missing_blocks.is_empty() {
-                return None
-            } else {
-                debug!("Stream finished, getting missing blocks: {:?}", &missing_blocks);
-                let missing_futs = self.get_blocks(&missing_blocks, self.with_tx);
-                if let YumBatchFuture::Waiting(futs) = missing_futs {
-                    for f in futs {
-                        self.queue.push_back((Instant::now(), f));
-                    }
-                }
-                self.queue.pop_front()
-            }
-        } else if self.from == self.to && !self.queue.is_empty() {
+    fn next(&mut self) -> Option<(Instant, YumFuture<Option<Transaction>>)> {
+        if self.tx_list.is_empty() && self.queue.is_empty() {
+            return None
+        } else if self.tx_list.is_empty() && !self.queue.is_empty() {
             // We're done, but there are a few more items in the queue, finish it out
             return self.queue.pop_front()
         } else if self.queue.len() > self.half_capacity() {
@@ -94,23 +66,29 @@ impl BlockStream {
             // you're waiting unnecessarily for futures to complete since they weren't spawned
             return self.queue.pop_front()
         } else {
-            let blocks_left = self.to - self.from;
-            let get_this_many = cmp::min(blocks_left, self.remaining_capacity() as u64);
+            let txns_left = self.tx_list.len();
+            let get_this_many = cmp::min(txns_left, self.remaining_capacity());
+            let mut this_batch = Vec::new();
 
-            let next_futs = self.get_block_range(self.from, self.from + get_this_many, self.with_tx);
+            for _ in 0..get_this_many {
+                if let Some(tx) = self.tx_list.pop_front() {
+                    this_batch.push(tx);
+                }
+            }
+
+            let next_futs = self.get_transactions(this_batch);
             if let YumBatchFuture::Waiting(futs) = next_futs {
                 for f in futs {
                     self.queue.push_back((Instant::now(), f));
                 }
             }
-            self.from += get_this_many;
             self.queue.pop_front()
         }
     }
 
 }
 
-impl OpSet for BlockStream {
+impl OpSet for TransactionStream {
     fn request<T>(
         &self,
         method: &str,
@@ -130,21 +108,19 @@ impl OpSet for BlockStream {
     }
 }
 
-impl BlockOps for BlockStream { }
+impl TransactionOps for TransactionStream { }
 
-impl Stream for BlockStream {
-    type Item = Block;
+impl Stream for TransactionStream {
+    type Item = Transaction;
     type Error = Error;
 
     fn poll(&mut self) -> Result<Async<Option<Self::Item>>, Self::Error> {
         trace!("Polling lazy stream");
         while let Some((ts, mut next_item)) = self.next() {
-            if let Async::Ready(block) = next_item.poll()? {
+            if let Async::Ready(transaction) = next_item.poll()? {
                 trace!("Next block in stream available");
-                if let Some(b) = block {
-                    let block_num = b.number.expect("Will always have a number here");
-                    self.completed.insert(block_num);
-                    return Ok(Async::Ready(Some(b)));
+                if let Some(tx) = transaction {
+                    return Ok(Async::Ready(Some(tx)));
                 } else {
                     // if we're here, there was probably a problem decoding the block.
                     return Ok(Async::NotReady)

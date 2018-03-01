@@ -1,18 +1,21 @@
-use std::u64;
+use std::{u64, usize};
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ethereum_models::objects::*;
 use ethereum_models::types::{H160, H256, U256};
+use fixed_hash::clean_0x;
 use futures::Future;
 use futures::future::Either;
+use futures::sync::mpsc;
 use serde::de::{DeserializeOwned};
 use serde::ser::Serialize;
 use serde_json::{self, Value};
 use tokio_timer::Timer;
 
 use error::{Error, ErrorKind};
-use client::{BlockStream, Client, YumBatchFuture, YumFuture};
+use client::{BlockStream, Client, Pubsub, TransactionStream, YumBatchFuture, YumFuture};
 use ops::{OpSet, TokenOps};
 
 pub type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
@@ -23,6 +26,13 @@ pub fn de<T: DeserializeOwned>(v: Value) -> Result<T, Error> {
 
 pub fn de_u64(v: Value) -> Result<u64, Error> {
     de::<U256>(v).map(|u256| u256.low_u64())
+}
+
+pub fn de_usize(v: Value) -> Result<usize, Error> {
+    de::<String>(v).and_then(|n| {
+        usize::from_str_radix(clean_0x(&n), 16)
+        .map_err(|_| ErrorKind::YumError("Couldn't parse usize".into()).into())
+    })
 }
 
 pub fn ser<T: Serialize>(t: &T) -> Value {
@@ -186,6 +196,10 @@ impl YumClient {
         BlockStream::new(self.client.clone(), from, to, with_tx)
     }
 
+    pub fn get_transaction_stream(&self, txns: Vec<H256>) -> TransactionStream {
+        TransactionStream::new(self.client.clone(), txns.into_iter().collect::<VecDeque<H256>>())
+    }
+
     pub fn get_code(&self, address: &H160, block: &BlockNumber) -> YumFuture<String> {
         self.client.request("eth_getCode", vec![ser(&address), ser(&block)], de::<String>)
     }
@@ -274,6 +288,19 @@ impl YumClient {
 
     pub fn shutdown(&self) -> Result<(), Error> {
         self.client.stop()
+    }
+
+    pub fn subscribe<T>(&self, params: Vec<Value>, op: fn(Value) -> Result<T, Error>) -> Pubsub<T>
+        where T: DeserializeOwned
+    {
+        let (tx, rx) = mpsc::unbounded();
+        let id_fut = self.client.request("parity_subscribe", params, de_usize);
+        Pubsub::new(id_fut, self.client.clone(), rx, Some(tx), op)
+    }
+
+    pub fn new_block_stream(&self) -> Pubsub<u64> {
+        let params = vec![ser(&"eth_blockNumber".to_string()), ser::<Vec<Value>>(&vec![])];
+        self.subscribe(params, de_u64)
     }
 
     #[cfg(feature = "parity")]

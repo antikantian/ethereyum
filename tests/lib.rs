@@ -92,23 +92,6 @@ mod yum_tests {
     }
 
     #[test]
-    fn client_connects_then_shuts_down() {
-        thread::sleep(Duration::from_millis(2000));
-
-        let (socket, t) = setup_websocket(3102, "hello", Value::String("said hello".into()));
-
-        thread::sleep(Duration::from_millis(2000));
-
-        let mut client = YumClient::new(&["ws://127.0.0.1:3102"], 1)
-            .expect("Client connection required");
-
-        thread::sleep(Duration::from_millis(2000));
-
-        assert!(socket.shutdown().is_ok());
-        assert!(t.join().is_ok());
-    }
-
-    #[test]
     fn gets_block_number() {
         thread::sleep(Duration::from_millis(2000));
 
