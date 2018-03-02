@@ -143,7 +143,7 @@ impl Stream for BlockStream {
                 trace!("Next block in stream available");
                 if let Some(b) = block {
                     let block_num = b.number.expect("Will always have a number here");
-                    self.completed.insert(block_num);
+                    self.completed.insert(block_num.low_u64());
                     return Ok(Async::Ready(Some(b)));
                 } else {
                     // if we're here, there was probably a problem decoding the block.
