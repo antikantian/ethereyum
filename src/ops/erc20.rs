@@ -24,8 +24,10 @@ pub trait TokenOps: OpSet {
 
         let op = move |v: Value| de::<String>(v).and_then(|s| {
             u8::from_str_radix(clean_0x(&s), 16)
-                .map_err(|_| {
-                    ErrorKind::YumError("Couldn't parse decimal string value as u8".into()).into()
+                .map_err(|e| {
+                    ErrorKind::YumError(
+                        format!("Couldn't parse decimal string value as u8: {:?}", e)
+                    ).into()
                 })
                 .and_then(|decimals| {
                     let amt = format!("{:?}", amount);
