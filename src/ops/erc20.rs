@@ -64,7 +64,7 @@ pub trait TokenOps: OpSet {
     fn token_decimals(&self, address: &H160) -> YumFuture<u8> {
         let op = |v: Value| de::<String>(v).and_then(|s| {
             u8::from_str_radix(clean_0x(&s), 16)
-                .map_err(|_| {
+                .map_err(|e| {
                     ErrorKind::YumError(
                         format!("Couldn't parse decimal string value as u8: {:?}", e)
                     ).into()
