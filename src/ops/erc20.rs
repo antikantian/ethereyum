@@ -34,7 +34,7 @@ pub trait TokenOps: OpSet {
                     BigDecimal::from_str(clean_0x(&amt))
                         .map(|x| {
                             let y = x / BigDecimal::from(1.0 * 10_f64.powi(decimals as i32));
-                            y.with_scale(12).to_f64()
+                            y.to_f64()
                         })
                         .map_err(|_| {
                             ErrorKind::YumError(
