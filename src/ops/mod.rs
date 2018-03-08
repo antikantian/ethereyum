@@ -52,12 +52,12 @@ pub trait OpSet {
                         .map(|l| unsafe { str::from_utf8_unchecked(&l) })
                         .map(|l| l.replace("0", " ").trim_right().replace(" ", "0"))
                         .and_then(|r| r.from_hex().ok())
-                        .ok_or(ErrorKind::YumError("Couldn't parse string".into()).into())
+                        .ok_or(ErrorKind::YumError(format!("Couldn't parse string: {}", &s)).into())
                         .and_then(|r| {
                             str::from_utf8(&r)
                                 .map(|t| t.to_string())
                                 .map_err(|_| {
-                                    ErrorKind::YumError("Couldn't parse string".into()).into()
+                                    ErrorKind::YumError(format!("Couldn't parse string: {}", &s)).into()
                                 })
                         })
                 })
