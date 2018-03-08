@@ -26,7 +26,7 @@ pub trait TokenOps: OpSet {
             u8::from_str_radix(clean_0x(&s), 16)
                 .map_err(|e| {
                     ErrorKind::YumError(
-                        format!("Couldn't parse decimal string value as u8: {:?}", e)
+                        format!("Couldn't parse decimal string value ({}) as u8: {:?}", &s, e)
                     ).into()
                 })
                 .and_then(|decimals| {
@@ -37,7 +37,8 @@ pub trait TokenOps: OpSet {
                             y.with_scale(12).to_f64()
                         })
                         .map_err(|_| {
-                            ErrorKind::YumError("Couldn't convert amount to BigDecimal".into()).into()
+                            ErrorKind::YumError(
+                                format!("Couldn't convert amount ({}) to BigDecimal", &amt)).into()
                         })
                 })
         });
@@ -106,7 +107,5 @@ pub trait TokenOps: OpSet {
     fn token_symbol(&self, address: &H160) -> YumFuture<String> {
         self.contract_string_var(address, "0x95d89b41")
     }
-
-
 
 }
