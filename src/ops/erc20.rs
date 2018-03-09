@@ -15,7 +15,7 @@ use {YumFuture, YumBatchFuture};
 use error::{Error, ErrorKind};
 
 pub trait TokenOps: OpSet {
-    fn token_amount_in_eth(&self, address: &H160, amount: U256) -> YumFuture<Option<f64>> {
+    fn token_amount_in_eth(&self, address: &H160, amount: U256) -> YumFuture<f64> {
         let astr = format!("{:?}", &address);
         let tc = TransactionCall::empty()
             .to(*address)
@@ -35,16 +35,18 @@ pub trait TokenOps: OpSet {
                 .and_then(|decimals| {
                     let amt = format!("{:?}", amount);
                     BigDecimal::from_str(clean_0x(&amt))
-                        .map(|x| {
+                        .map_err(Into::into)
+                        .and_then(|x| {
                             let y = x / BigDecimal::from(1.0 * 10_f64.powi(decimals as i32));
                             y.to_f64()
-                        })
-                        .map_err(|_| {
-                            ErrorKind::YumError(
-                                format!(
-                                    "[{}] Couldn't convert amount ({}) to BigDecimal",
-                                    astr, &amt
-                                )).into()
+                                .ok_or(
+                                    ErrorKind::YumError(
+                                        format!(
+                                            "[{}] Couldn't convert amount ({}) to BigDecimal",
+                                            astr, &amt
+                                        )
+                                    ).into()
+                                )
                         })
                 })
         });

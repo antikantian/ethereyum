@@ -3,6 +3,7 @@
 
 use std::io;
 
+use bigdecimal;
 use client;
 use crossbeam_channel;
 use futures;
@@ -19,6 +20,7 @@ error_chain! {
     Json(serde_json::Error);
     Mpsc(futures::sync::mpsc::SendError<client::SocketRequest>);
     Ws(tungstenite::Error);
+    ParseBigDecimal(bigdecimal::ParseBigDecimalError);
   }
   errors {
     HostsUnreachable {
