@@ -17,6 +17,7 @@ use error::{Error, ErrorKind};
 pub trait TokenOps: OpSet {
     fn token_amount_in_eth(&self, address: &H160, amount: U256) -> YumFuture<f64> {
         let astr = format!("{:?}", &address);
+        let astr2 = format!("{:?}", &address);
         let tc = TransactionCall::empty()
             .to(*address)
             .data("0x313ce567")
@@ -51,12 +52,32 @@ pub trait TokenOps: OpSet {
                 })
         });
 
-        let req = match self.batch_request(vec![("eth_call", vec![ser(&tc)], Box::new(op))]) {
-            YumBatchFuture::Waiting(mut futs) => futs.pop().unwrap(),
-            _ => unreachable!()
-        };
-
-        req
+        non_compliant_tokens(&address)
+            .map(|(_, _, decimals)| {
+                let amt = format!("{:?}", amount);
+                let res = BigDecimal::from_str(clean_0x(&amt))
+                    .map_err::<Error, _>(Into::into)
+                    .and_then(|x| {
+                        let y = x / BigDecimal::from(1.0 * 10_f64.powi(decimals as i32));
+                        y.to_f64()
+                            .ok_or::<Error>(
+                                ErrorKind::YumError(
+                                    format!(
+                                        "[{}] Couldn't convert amount ({}) to BigDecimal",
+                                        astr2, &amt
+                                    )
+                                ).into()
+                            )
+                    });
+                YumFuture::Now(res.unwrap())
+            })
+            .unwrap_or({
+                let req = match self.batch_request(vec![("eth_call", vec![ser(&tc)], Box::new(op))]) {
+                    YumBatchFuture::Waiting(mut futs) => futs.pop().unwrap(),
+                    _ => unreachable!()
+                };
+                req
+            })
     }
 
     fn _token_decimals(
@@ -157,6 +178,9 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         },
         "c66ea802717bfb9833400264dd12c2bceaa34a6d" => {
             Some(("MakerDAO".to_string(), "MKR".to_string(), 18))
+        },
+        "5c543e7ae0a1104f78406c340e9c64fd9fce5170" => {
+            Some(("vSlice".to_string(), "VSL".to_string(), 18))
         }
         _ => None
     }
