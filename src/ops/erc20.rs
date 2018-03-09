@@ -15,7 +15,6 @@ use {YumFuture, YumBatchFuture};
 use error::{Error, ErrorKind};
 
 pub trait TokenOps: OpSet {
-
     fn token_amount_in_eth(&self, address: &H160, amount: U256) -> YumFuture<Option<f64>> {
         let tc = TransactionCall::empty()
             .to(*address)
@@ -101,11 +100,30 @@ pub trait TokenOps: OpSet {
     }
 
     fn token_name(&self, address: &H160) -> YumFuture<String> {
-        self.contract_string_var(address, "0x06fdde03")
+        non_compliant_tokens(&address)
+            .map(|(name, _)| YumFuture::Now(name))
+            .unwrap_or(self.contract_string_var(address, "0x06fdde03"))
     }
 
     fn token_symbol(&self, address: &H160) -> YumFuture<String> {
-        self.contract_string_var(address, "0x95d89b41")
+        non_compliant_tokens(&address)
+            .map(|(_, symbol)| YumFuture::Now(symbol))
+            .unwrap_or(self.contract_string_var(address, "0x95d89b41"))
     }
 
+}
+
+fn non_compliant_tokens(address: &H160) -> Option<(String, String)> {
+    match format!("{:?}", &address).as_str() {
+        "0x84119cb33e8f590d75c2d6ea4e6b0741a7494eda" => {
+            Some(("GigaWatt Token".to_string(), "WTT".to_string()))
+        },
+        "0xef68e7c694f40c8202821edf525de3782458639f" => {
+            Some(("Loopring".to_string(), "LRC".to_string()))
+        },
+        "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a" => {
+            Some(("DigixDAO".to_string(), "DGD".to_string()))
+        },
+        _ => None
+    }
 }

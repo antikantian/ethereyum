@@ -12,6 +12,7 @@ use error::Error;
 pub enum YumFuture<T> {
     Waiting(oneshot::Receiver<Result<Value, Error>>, fn(Value) -> Result<T, Error>),
     WaitingFn(oneshot::Receiver<Result<Value, Error>>, Arc<Box<Fn(Value) -> Result<T, Error> + Send + Sync>>),
+    Now(T),
     Complete,
     Error(Error)
 }
@@ -58,6 +59,10 @@ impl<T> Future for YumFuture<T>
                     *self = WaitingFn(f, t);
                 }
             },
+            Now(t) => {
+                *self = Complete;
+                return Ok(Async::Ready(t));
+            }
             Complete => {},
             Error(e) => {
                 *self = Complete;
