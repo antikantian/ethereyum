@@ -16,6 +16,7 @@ use error::{Error, ErrorKind};
 
 pub trait TokenOps: OpSet {
     fn token_amount_in_eth(&self, address: &H160, amount: U256) -> YumFuture<Option<f64>> {
+        let astr = format!("{:?}", &address);
         let tc = TransactionCall::empty()
             .to(*address)
             .data("0x313ce567")
@@ -25,7 +26,10 @@ pub trait TokenOps: OpSet {
             u8::from_str_radix(clean_0x(&s), 16)
                 .map_err(|e| {
                     ErrorKind::YumError(
-                        format!("Couldn't parse decimal string value ({}) as u8: {:?}", &s, e)
+                        format!(
+                            "[{}] Couldn't parse decimal string value ({}) as u8: {:?}",
+                            astr, &s, e
+                        )
                     ).into()
                 })
                 .and_then(|decimals| {
@@ -37,7 +41,10 @@ pub trait TokenOps: OpSet {
                         })
                         .map_err(|_| {
                             ErrorKind::YumError(
-                                format!("Couldn't convert amount ({}) to BigDecimal", &amt)).into()
+                                format!(
+                                    "[{}] Couldn't convert amount ({}) to BigDecimal",
+                                    astr, &amt
+                                )).into()
                         })
                 })
         });
@@ -50,30 +57,40 @@ pub trait TokenOps: OpSet {
         req
     }
 
-    fn _token_decimals<T>(&self, address: &H160, op: fn(Value) -> Result<T, Error>) -> YumFuture<T>
-        where T: DeserializeOwned
+    fn _token_decimals(
+        &self,
+        address: &H160,
+        op: Box<Fn(Value) -> Result<u8, Error> + Send + Sync>) -> YumFuture<u8>
     {
         let tc = TransactionCall::empty()
             .to(*address)
             .data("0x313ce567")
             .done();
 
-        self.request("eth_call", vec![ser(&tc)], op)
+        let req = match self.batch_request(vec![("eth_call", vec![ser(&tc)], op)]) {
+            YumBatchFuture::Waiting(mut futs) => futs.pop().unwrap(),
+            _ => unreachable!()
+        };
+        req
     }
 
     fn token_decimals(&self, address: &H160) -> YumFuture<u8> {
+        let astr = format!("{:?}", &address);
         non_compliant_tokens(&address)
             .map(|(_, _, decimals)| YumFuture::Now(decimals))
             .unwrap_or({
-                let op = |v: Value| de::<String>(v).and_then(|s| {
+                let op = move |v: Value| de::<String>(v).and_then(|s| {
                     u8::from_str_radix(clean_0x(&s), 16)
                         .map_err(|e| {
                             ErrorKind::YumError(
-                                format!("Couldn't parse decimal string value as u8: {:?}", e)
+                                format!(
+                                    "[{}] Couldn't parse decimal string value as u8: {:?}",
+                                    astr, e
+                                )
                             ).into()
                         })
                 });
-                self._token_decimals(&address, op)
+                self._token_decimals(&address, Box::new(op))
             })
     }
 
@@ -135,6 +152,9 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         },
         "b5a5f22694352c15b00323844ad545abb2b11028" => {
             Some(("ICON".to_string(), "ICX".to_string(), 18))
+        },
+        "c66ea802717bfb9833400264dd12c2bceaa34a6d" => {
+            Some(("MakerDAO".to_string(), "MKR".to_string(), 18))
         }
         _ => None
     }
