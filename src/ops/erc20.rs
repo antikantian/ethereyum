@@ -62,16 +62,19 @@ pub trait TokenOps: OpSet {
     }
 
     fn token_decimals(&self, address: &H160) -> YumFuture<u8> {
-        let op = |v: Value| de::<String>(v).and_then(|s| {
-            u8::from_str_radix(clean_0x(&s), 16)
-                .map_err(|e| {
-                    ErrorKind::YumError(
-                        format!("Couldn't parse decimal string value as u8: {:?}", e)
-                    ).into()
-                })
-        });
-
-        self._token_decimals(&address, op)
+        non_compliant_token(&address)
+            .map(|(_, _, decimals)| YumFuture::now(decimals))
+            .unwrap_or({
+                let op = |v: Value| de::<String>(v).and_then(|s| {
+                    u8::from_str_radix(clean_0x(&s), 16)
+                        .map_err(|e| {
+                            ErrorKind::YumError(
+                                format!("Couldn't parse decimal string value as u8: {:?}", e)
+                            ).into()
+                        })
+                });
+                self._token_decimals(&address, op)
+            })
     }
 
     fn token_get_balance(&self, token: &H160, address: &H160, block: Option<BlockNumber>)
@@ -101,29 +104,38 @@ pub trait TokenOps: OpSet {
 
     fn token_name(&self, address: &H160) -> YumFuture<String> {
         non_compliant_tokens(&address)
-            .map(|(name, _)| YumFuture::Now(name))
+            .map(|(name, _, _)| YumFuture::Now(name))
             .unwrap_or(self.contract_string_var(address, "0x06fdde03"))
     }
 
     fn token_symbol(&self, address: &H160) -> YumFuture<String> {
         non_compliant_tokens(&address)
-            .map(|(_, symbol)| YumFuture::Now(symbol))
+            .map(|(_, symbol, _)| YumFuture::Now(symbol))
             .unwrap_or(self.contract_string_var(address, "0x95d89b41"))
     }
 
 }
 
-fn non_compliant_tokens(address: &H160) -> Option<(String, String)> {
+fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
     match clean_0x(format!("{:?}", &address).as_str()) {
         "84119cb33e8f590d75c2d6ea4e6b0741a7494eda" => {
-            Some(("GigaWatt Token".to_string(), "WTT".to_string()))
+            Some(("GigaWatt Token".to_string(), "WTT".to_string(), 0))
         },
         "ef68e7c694f40c8202821edf525de3782458639f" => {
-            Some(("Loopring".to_string(), "LRC".to_string()))
+            Some(("Loopring".to_string(), "LRC".to_string(), 18))
         },
         "e0b7927c4af23765cb51314a0e0521a9645f0e2a" => {
-            Some(("DigixDAO".to_string(), "DGD".to_string()))
+            Some(("DigixDAO".to_string(), "DGD".to_string(), 9))
         },
+        "ff3519eeeea3e76f1f699ccce5e23ee0bdda41ac" => {
+            Some(("Blockchain Capital".to_string(), "BCAP".to_string(), 0))
+        },
+        "5554e04e76533e1d14c52f05beef6c9d329e1e30" => {
+            Some(("Autonio".to_string(), "NIO".to_string(), 0))
+        },
+        "b5a5f22694352c15b00323844ad545abb2b11028" => {
+            Some(("ICON".to_string(), "ICX".to_string(), 18))
+        }
         _ => None
     }
 }
