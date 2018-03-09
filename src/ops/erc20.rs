@@ -114,14 +114,14 @@ pub trait TokenOps: OpSet {
 }
 
 fn non_compliant_tokens(address: &H160) -> Option<(String, String)> {
-    match format!("{:?}", &address).as_str() {
-        "0x84119cb33e8f590d75c2d6ea4e6b0741a7494eda" => {
+    match clean_0x(format!("{:?}", &address).as_str()) {
+        "84119cb33e8f590d75c2d6ea4e6b0741a7494eda" => {
             Some(("GigaWatt Token".to_string(), "WTT".to_string()))
         },
-        "0xef68e7c694f40c8202821edf525de3782458639f" => {
+        "ef68e7c694f40c8202821edf525de3782458639f" => {
             Some(("Loopring".to_string(), "LRC".to_string()))
         },
-        "0xe0b7927c4af23765cb51314a0e0521a9645f0e2a" => {
+        "e0b7927c4af23765cb51314a0e0521a9645f0e2a" => {
             Some(("DigixDAO".to_string(), "DGD".to_string()))
         },
         _ => None
