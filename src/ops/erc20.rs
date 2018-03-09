@@ -62,8 +62,8 @@ pub trait TokenOps: OpSet {
     }
 
     fn token_decimals(&self, address: &H160) -> YumFuture<u8> {
-        non_compliant_token(&address)
-            .map(|(_, _, decimals)| YumFuture::now(decimals))
+        non_compliant_tokens(&address)
+            .map(|(_, _, decimals)| YumFuture::Now(decimals))
             .unwrap_or({
                 let op = |v: Value| de::<String>(v).and_then(|s| {
                     u8::from_str_radix(clean_0x(&s), 16)
