@@ -20,7 +20,7 @@ use futures::sync::mpsc::{SendError, TrySendError};
 use futures_cpupool::CpuPool;
 use hyper::header::ContentType;
 use parking_lot::Mutex;
-use reqwest::{Client as HttpClient, StatusCode};
+use reqwest::{self, Client as HttpClient, StatusCode};
 use rpc::{self, Output};
 use serde::de::{self, Deserialize, Deserializer, DeserializeOwned};
 use serde_json::{self, Value};
@@ -81,7 +81,6 @@ pub struct Client {
     timeout: Duration,
     worker_id: Arc<AtomicUsize>,
     sockets: Arc<Mutex<VecDeque<SocketWorker>>>,
-    http: HttpClient,
     ids: Arc<AtomicUsize>,
     pending: PendingRequests,
     subscriptions: Subscriptions,
@@ -101,7 +100,6 @@ impl Client {
             hosts: hosts.iter().cloned().map(|h| h.to_string()).collect(),
             worker_id: Arc::new(AtomicUsize::new(0)),
             sockets: Arc::new(Mutex::new(VecDeque::new())),
-            http: HttpClient::new(),
             ids: Arc::new(AtomicUsize::new(1)),
             pending: requests,
             subscriptions: subs,
@@ -210,7 +208,7 @@ impl Client {
 
     pub fn send_http(&self, msg: String) -> Result<(), Error> {
         debug!("Sending via http");
-        let mut resp = self.http.post("http://127.0.0.1:8545")
+        let mut resp = HttpClient::new().post("http://127.0.0.1:8545")
             .header(ContentType::json())
             .body(msg)
             .send()?;
