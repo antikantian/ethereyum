@@ -181,7 +181,19 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         },
         "5c543e7ae0a1104f78406c340e9c64fd9fce5170" => {
             Some(("vSlice".to_string(), "VSL".to_string(), 18))
-        }
+        },
+        "52903256dd18d85c2dc4a6c999907c9793ea61e3" => {
+            Some(("INS Promo".to_string(), "INSP".to_string(), 0))
+        },
+        "d2308446536a0bad028ab8c090d62e1ea2a51f24" => {
+            Some(("GNEISS Coin".to_string(), "GNEISS".to_string(), 0))
+        },
+        "014b50466590340d41307cc54dcee990c8d58aa8" => {
+            Some(("ICOS".to_string(), "ICOS".to_string(), 6))
+        },
+        "8effd494eb698cc399af6231fccd39e08fd20b15" => {
+            Some(("PIX Token".to_string(), "PIX".to_string(), 0))
+        },
         _ => None
     }
 }

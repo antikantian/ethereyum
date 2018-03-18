@@ -1,7 +1,5 @@
 use std::cmp;
 use std::collections::{BTreeSet, VecDeque};
-use std::mem;
-use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,7 +9,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use client::{Client, YumFuture, YumBatchFuture};
-use error::{Error, ErrorKind};
+use error::Error;
 use ops::{BlockOps, OpSet};
 
 pub struct BlockStream {
