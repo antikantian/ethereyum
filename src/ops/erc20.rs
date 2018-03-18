@@ -194,6 +194,9 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         "8effd494eb698cc399af6231fccd39e08fd20b15" => {
             Some(("PIX Token".to_string(), "PIX".to_string(), 0))
         },
+        "2df8286c9396f52e17dfee75d2e41e52609cf897" => {
+            Some(("Silent Notary".to_string(), "SNTR".to_string(), 4))
+        }
         _ => None
     }
 }
