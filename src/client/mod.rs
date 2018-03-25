@@ -87,7 +87,8 @@ pub struct Client {
     ts: Timestamps,
     ts_thread: Option<thread::JoinHandle<()>>,
     sentinel_thread: Option<thread::JoinHandle<()>>,
-    reconnection_attempts: AtomicUsize
+    reconnection_attempts: AtomicUsize,
+    http: HttpClient
 }
 
 impl Client {
@@ -106,7 +107,8 @@ impl Client {
             ts: timestamps,
             ts_thread: None,
             sentinel_thread: None,
-            reconnection_attempts: AtomicUsize::new(0)
+            reconnection_attempts: AtomicUsize::new(0),
+            http: HttpClient::new()
         };
 
         for host in hosts {
@@ -208,7 +210,12 @@ impl Client {
 
     pub fn send_http(&self, msg: String) -> Result<(), Error> {
         debug!("Sending via http");
-        let mut resp = HttpClient::new().post("http://127.0.0.1:8545")
+//        let mut resp = HttpClient::new().post("http://127.0.0.1:8545")
+//            .header(ContentType::json())
+//            .body(msg)
+//            .send()?;
+
+        let mut resp = self.http.post("http://127.0.0.1:8545")
             .header(ContentType::json())
             .body(msg)
             .send()?;
