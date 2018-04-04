@@ -31,6 +31,8 @@ fn main() {
     let some_valid_block_num = 4737415u64;
     let some_valid_blocks_non_sequential = vec![4000000_u64, 4500000_u64, 5000001_u64, 3999999_u64];
     let some_token_address = H160::from_str("f230b790e05390fc8295f4d3f60332c93bed42e2").unwrap();
+    let eth_address = H160::from(0x0);
+    let etherdelta_admin = H160::from_str("1ed014aec47fae44c9e55bac7662c0b78ae61798").unwrap();
     let some_token_holder = H160::from_str("a18ff761a52ce1cb71ab9a19bf4e4b707b388b83").unwrap();
 
     let accounts = {
@@ -189,6 +191,13 @@ fn main() {
         match yum.token_amount_in_eth(&some_token_address, U256::from(50000)).wait() {
             Ok(x) => println!("yum.token_amount_in_eth() ... {}: {:?}", Green.paint("passed"), x),
             Err(e) => println!("yum.token_amount_in_eth() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
+
+    let get_etherdelta_balance = {
+        match yum.etherdelta_get_balance(&eth_address, &etherdelta_admin, Some(latest_block)).wait() {
+            Ok(x) => println!("yum.etherdelta_get_balance() ... {}: {:?}", Green.paint("passed"), x),
+            Err(e) => println!("yum.etherdelta_get_balance() ... {}: {:?}", Red.paint("failed"), e)
         }
     };
 

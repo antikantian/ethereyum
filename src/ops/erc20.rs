@@ -5,6 +5,7 @@ use bigdecimal::BigDecimal;
 use ethereum_models::objects::{BlockNumber, TransactionCall};
 use ethereum_models::types::{H160, U256};
 use fixed_hash::clean_0x;
+use futures::Future;
 use num::ToPrimitive;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -117,6 +118,34 @@ pub trait TokenOps: OpSet {
             })
     }
 
+    fn etherdelta_get_balance(&self, token: &H160, user: &H160, block: Option<BlockNumber>)
+        -> YumFuture<U256>
+    {
+        let block = match block {
+            Some(b) => b,
+            None => BlockNumber::Name("latest")
+        };
+
+        let method_id = "0xf7888aec";
+        let data = format!(
+            "{}000000000000000000000000{:?}000000000000000000000000{:?}", method_id, &token, &user
+        );
+        let tc = TransactionCall::empty()
+            .to(H160::from_str("8d12a197cb00d4747a1fe03395095ce2a5cc6819").unwrap())
+            .data(&data)
+            .done();
+
+        let op = |v: Value| {
+            de::<String>(v)
+                .and_then(|s| {
+                    U256::from_str(clean_0x(&s))
+                        .map_err(|_| ErrorKind::YumError("Couldn't parse u256".into()).into())
+                })
+        };
+
+        self.request("eth_call", vec![ser(&tc), ser(&block)], op)
+    }
+
     fn token_get_balance(&self, token: &H160, address: &H160, block: Option<BlockNumber>)
         -> YumFuture<U256>
     {
@@ -158,6 +187,9 @@ pub trait TokenOps: OpSet {
 
 fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
     match clean_0x(format!("{:?}", &address).as_str()) {
+        "0000000000000000000000000000000000000000" => {
+            Some(("Ether".to_string(), "ETH".to_string(), 18))
+        },
         "84119cb33e8f590d75c2d6ea4e6b0741a7494eda" => {
             Some(("GigaWatt Token".to_string(), "WTT".to_string(), 0))
         },
