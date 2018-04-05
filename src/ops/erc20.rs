@@ -229,6 +229,12 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         "2df8286c9396f52e17dfee75d2e41e52609cf897" => {
             Some(("Silent Notary".to_string(), "SNTR".to_string(), 4))
         },
+        "62a56a4a2ef4d355d34d10fbf837e747504d38d4" => {
+            Some(("Paypex".to_string(), "PAYX".to_string(), 2))
+        },
+        "d51e852630debc24e9e1041a03d80a0107f8ef0c" => {
+            Some(("Orium".to_string(), "ORM".to_string(), 0))
+        }
         _ => None
     }
 }
