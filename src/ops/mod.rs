@@ -1,10 +1,12 @@
 mod block;
 mod erc20;
+mod market;
 mod pubsub;
 mod transaction;
 
 pub use self::block::BlockOps;
 pub use self::erc20::TokenOps;
+pub use self::market::MarketOps;
 pub use self::pubsub::PubsubOps;
 pub use self::transaction::TransactionOps;
 
@@ -14,6 +16,7 @@ use error::{Error, ErrorKind};
 use ethereum_models::objects::TransactionCall;
 use ethereum_models::types::H160;
 use fixed_hash::clean_0x;
+use reqwest::{Client as HttpClient};
 use rustc_serialize::hex::FromHex;
 use serde::de::DeserializeOwned;
 use serde_json::Value;

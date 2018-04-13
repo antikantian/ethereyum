@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use chrono::{Utc};
+use chrono::Utc;
 use fixed_hash::clean_0x;
 use fnv::FnvHashMap;
 use futures::{Async, Future, IntoFuture, Sink, Stream};

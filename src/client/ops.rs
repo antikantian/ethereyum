@@ -1,5 +1,6 @@
 use ethereum_models::objects::{Block, BlockNumber};
 use ethereum_models::types::{H256, U256};
+use reqwest::{Client as HttpClient};
 use serde::de::DeserializeOwned;
 use serde_json::{self, Value};
 use yum::{Op1, de, ser};

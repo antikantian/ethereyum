@@ -31,6 +31,10 @@ error_chain! {
         description("client not connected error"),
         display("Request was made of a disconnected client")
     }
+    GdaxError {
+        description("problem with gdax api"),
+        display("GDAX api request failed")
+    }
     BatchRequestError {
         description("batch error"),
         display("error sending batch request")

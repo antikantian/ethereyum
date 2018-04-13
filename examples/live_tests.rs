@@ -1,4 +1,5 @@
 extern crate ansi_term;
+extern crate chrono;
 extern crate ethereum_models;
 extern crate ethereyum;
 extern crate futures;
@@ -8,11 +9,12 @@ use std::str::FromStr;
 
 use ansi_term::Colour;
 use ansi_term::Colour::{Green, Red};
+use chrono::{DateTime, TimeZone, Utc};
 use futures::Future;
 use ethereum_models::types::{H160, H256, U256};
 use ethereum_models::objects::*;
 use ethereyum::{YumFuture, YumBatchFuture, YumBatchFutureT};
-use ethereyum::ops::{TokenOps};
+use ethereyum::ops::{MarketOps, TokenOps};
 use ethereyum::yum::YumClient;
 
 
@@ -34,6 +36,8 @@ fn main() {
     let eth_address = H160::from(0x0);
     let etherdelta_admin = H160::from_str("1ed014aec47fae44c9e55bac7662c0b78ae61798").unwrap();
     let some_token_holder = H160::from_str("a18ff761a52ce1cb71ab9a19bf4e4b707b388b83").unwrap();
+    let some_datetime_start = Utc.ymd(2017, 4, 1).and_hms(0, 0, 0);
+    let some_datetime_end = Utc.ymd(2017, 4, 1).and_hms(23, 59, 59);
 
     let accounts = {
         match yum.accounts().wait() {
@@ -198,6 +202,13 @@ fn main() {
         match yum.etherdelta_get_balance(&eth_address, &etherdelta_admin, Some(latest_block)).wait() {
             Ok(x) => println!("yum.etherdelta_get_balance() ... {}: {:?}", Green.paint("passed"), x),
             Err(e) => println!("yum.etherdelta_get_balance() ... {}: {:?}", Red.paint("failed"), e)
+        }
+    };
+
+    let get_price_usd = {
+        match yum.eth_price_usd(&some_datetime_start) {
+            Ok(x) => println!("yum.eth_price_usd() ... {}: {:?}", Green.paint("passed"), x),
+            Err(e) => println!("yum.eth_price_usd() ... {}: {:?}", Red.paint("failed"), e)
         }
     };
 

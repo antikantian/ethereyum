@@ -16,7 +16,7 @@ use tokio_timer::Timer;
 
 use error::{Error, ErrorKind};
 use client::{BlockStream, Client, Pubsub, TransactionStream, YumBatchFuture, YumFuture};
-use ops::{OpSet, PubsubOps, TokenOps};
+use ops::{MarketOps, OpSet, PubsubOps, TokenOps};
 
 pub type Op1<T> = Box<Fn(Value) -> Result<T, Error> + Send + Sync>;
 
@@ -330,6 +330,8 @@ impl OpSet for YumClient {
         self.client.batch_request(req)
     }
 }
+
+impl MarketOps for YumClient {}
 
 impl PubsubOps for YumClient {
     fn get_client(&self) -> Arc<Client> {
