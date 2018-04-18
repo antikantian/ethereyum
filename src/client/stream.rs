@@ -94,11 +94,11 @@ impl BlockStream {
         debug!("from: {}, to: {}, queue len: {}", self.from, self.to, self.queue.len());
         if self.from == self.to && self.queue.is_empty() {
             //We're done with the stream.  Check if any blocks didn't go through.
-            let mut requested_blocks = (self.start_block..self.to + 1)
+            let requested_blocks = (self.start_block..self.to + 1)
                 .into_iter()
                 .collect::<BTreeSet<u64>>();
 
-            requested_blocks.append(&mut self.should_skip);
+            self.completed.append(&mut self.should_skip);
 
             let missing_blocks = requested_blocks
                 .difference(&self.completed)
