@@ -47,6 +47,29 @@ impl BlockStream {
         }
     }
 
+    pub fn with_options(
+        client: Arc<Client>,
+        from: u64,
+        to: u64,
+        with_tx: bool,
+        skip: BTreeSet<u64>,
+        batch: u64,
+        buffer: u64) -> Self
+    {
+        BlockStream {
+            from,
+            to,
+            client,
+            with_tx,
+            start_block: from,
+            batch_size: batch,
+            buffer_size: buffer as usize,
+            queue: VecDeque::new(),
+            completed: BTreeSet::new(),
+            should_skip: skip
+        }
+    }
+
     fn has_next(&self) -> bool {
         self.from < self.to || !self.queue.is_empty()
     }

@@ -206,6 +206,20 @@ impl YumClient {
         BlockStream::new(self.client.clone(), from, to, with_tx, skip)
     }
 
+    pub fn get_partial_block_stream_opts(
+        &self,
+        from: u64,
+        to: u64,
+        with_tx: bool,
+        batch_size: u64,
+        buffer_size: u64,
+        skip: BTreeSet<u64>) -> BlockStream
+    {
+        BlockStream::with_options(
+            self.client.clone(), from, to, with_tx, skip, batch_size, buffer_size
+        )
+    }
+
     pub fn get_transaction_stream(&self, txns: Vec<H256>) -> TransactionStream {
         TransactionStream::new(self.client.clone(), txns.into_iter().collect::<VecDeque<H256>>())
     }
