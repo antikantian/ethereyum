@@ -41,13 +41,13 @@ pub trait BlockOps: OpSet {
                 BlockNumber::Name(n) => serde_json::to_value(&n).unwrap()
             };
 
-            let mut get_tx = with_tx;
-
             if let BlockNumber::Number(n) = block {
-                get_tx = !skip_tx.contains(&n);
+                if !skip_tx.contains(&n) {
+                    requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
+                }
+            } else {
+                requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
             }
-
-            requests.push(("eth_getBlockByNumber", vec![b, ser(&get_tx)], op))
         }
         self.batch_request(requests)
     }
