@@ -98,7 +98,7 @@ impl BlockStream {
                 .into_iter()
                 .collect::<BTreeSet<u64>>();
 
-            self.completed.append(&mut self.should_skip);
+            //self.completed.append(&mut self.should_skip);
 
             let missing_blocks = requested_blocks
                 .difference(&self.completed)

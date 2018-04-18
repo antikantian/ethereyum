@@ -42,9 +42,10 @@ pub trait BlockOps: OpSet {
             };
 
             if let BlockNumber::Number(n) = block {
-                if !skip_tx.contains(&n) {
-                    requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
-                }
+//                if !skip_tx.contains(&n) {
+//                    requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
+//                }
+                requests.push(("eth_getBlockByNumber", vec![b, ser(&!skip_tx.contains(&n))], op))
             } else {
                 requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
             }
