@@ -21,21 +21,29 @@ pub struct BlockStream {
     with_tx: bool,
     queue: VecDeque<(Instant, YumFuture<Option<Block>>)>,
     completed: BTreeSet<u64>,
+    should_skip: BTreeSet<u64>,
     client: Arc<Client>
 }
 
 impl BlockStream {
-    pub fn new(client: Arc<Client>, from: u64, to: u64, with_tx: bool) -> Self {
+    pub fn new(
+        client: Arc<Client>,
+        from: u64,
+        to: u64,
+        with_tx: bool,
+        skip: BTreeSet<u64>) -> Self
+    {
         BlockStream {
-            start_block: from,
             from,
             to,
             client,
             with_tx,
+            start_block: from,
             batch_size: 10,
             buffer_size: 5,
             queue: VecDeque::new(),
-            completed: BTreeSet::new()
+            completed: BTreeSet::new(),
+            should_skip: skip
         }
     }
 
@@ -95,7 +103,16 @@ impl BlockStream {
             let blocks_left = self.to - self.from;
             let get_this_many = cmp::min(blocks_left, self.remaining_capacity() as u64);
 
-            let next_futs = self.get_block_range(self.from, self.from + get_this_many, self.with_tx);
+            let next_futs = {
+                if self.should_skip.len() == 0 {
+                    self.get_block_range(self.from, self.from + get_this_many, self.with_tx)
+                } else {
+                    self.get_partial_block_range(
+                        self.from, self.from + get_this_many, self.with_tx, &self.should_skip
+                    )
+                }
+            };
+
             if let YumBatchFuture::Waiting(futs) = next_futs {
                 for f in futs {
                     self.queue.push_back((Instant::now(), f));

@@ -1,5 +1,5 @@
 use std::{u64, usize};
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -193,7 +193,17 @@ impl YumClient {
     }
 
     pub fn get_block_stream(&self, from: u64, to: u64, with_tx: bool) -> BlockStream {
-        BlockStream::new(self.client.clone(), from, to, with_tx)
+        BlockStream::new(self.client.clone(), from, to, with_tx, BTreeSet::new())
+    }
+
+    pub fn get_partial_block_stream(
+        &self,
+        from: u64,
+        to: u64,
+        with_tx: bool,
+        skip: BTreeSet<u64>) -> BlockStream
+    {
+        BlockStream::new(self.client.clone(), from, to, with_tx, skip)
     }
 
     pub fn get_transaction_stream(&self, txns: Vec<H256>) -> TransactionStream {
