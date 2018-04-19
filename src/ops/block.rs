@@ -29,8 +29,7 @@ pub trait BlockOps: OpSet {
     fn _get_blocks(
         &self,
         blocks: Vec<BlockNumber>,
-        with_tx: bool,
-        skip_tx: &BTreeSet<u64>) -> YumBatchFuture<Option<Block>>
+        with_tx: bool) -> YumBatchFuture<Option<Block>>
     {
         let mut requests: Vec<(&str, Vec<Value>, Op1<Option<Block>>)> = Vec::new();
 
@@ -41,14 +40,7 @@ pub trait BlockOps: OpSet {
                 BlockNumber::Name(n) => serde_json::to_value(&n).unwrap()
             };
 
-            if let BlockNumber::Number(n) = block {
-//                if !skip_tx.contains(&n) {
-//                    requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
-//                }
-                requests.push(("eth_getBlockByNumber", vec![b, ser(&!skip_tx.contains(&n))], op))
-            } else {
-                requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
-            }
+            requests.push(("eth_getBlockByNumber", vec![b, ser(&with_tx)], op))
         }
         self.batch_request(requests)
     }
@@ -59,8 +51,7 @@ pub trait BlockOps: OpSet {
                 .into_iter()
                 .map(|b| BlockNumber::Number(*b))
                 .collect::<Vec<BlockNumber>>(),
-            with_tx,
-            &BTreeSet::new()
+            with_tx
         )
     }
 
@@ -73,21 +64,6 @@ pub trait BlockOps: OpSet {
             .map(|n| BlockNumber::Number(n))
             .collect::<Vec<BlockNumber>>();
 
-        self._get_blocks(blocks, with_tx, &BTreeSet::new())
-    }
-
-    fn get_partial_block_range(
-        &self,
-        from: u64,
-        to: u64,
-        with_tx: bool,
-        skip_tx: &BTreeSet<u64>) -> YumBatchFuture<Option<Block>>
-    {
-        let blocks = (from..to + 1)
-            .into_iter()
-            .map(|n| BlockNumber::Number(n))
-            .collect::<Vec<BlockNumber>>();
-
-        self._get_blocks(blocks, with_tx, &skip_tx)
+        self._get_blocks(blocks, with_tx)
     }
 }

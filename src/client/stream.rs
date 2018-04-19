@@ -21,18 +21,11 @@ pub struct BlockStream {
     with_tx: bool,
     queue: VecDeque<(Instant, YumFuture<Option<Block>>)>,
     completed: BTreeSet<u64>,
-    should_skip: BTreeSet<u64>,
     client: Arc<Client>
 }
 
 impl BlockStream {
-    pub fn new(
-        client: Arc<Client>,
-        from: u64,
-        to: u64,
-        with_tx: bool,
-        skip: BTreeSet<u64>) -> Self
-    {
+    pub fn new(client: Arc<Client>, from: u64, to: u64, with_tx: bool) -> Self {
         BlockStream {
             from,
             to,
@@ -43,7 +36,6 @@ impl BlockStream {
             buffer_size: 5,
             queue: VecDeque::new(),
             completed: BTreeSet::new(),
-            should_skip: skip
         }
     }
 
@@ -52,7 +44,6 @@ impl BlockStream {
         from: u64,
         to: u64,
         with_tx: bool,
-        skip: BTreeSet<u64>,
         batch: u64,
         buffer: u64) -> Self
     {
@@ -66,7 +57,6 @@ impl BlockStream {
             buffer_size: buffer as usize,
             queue: VecDeque::new(),
             completed: BTreeSet::new(),
-            should_skip: skip
         }
     }
 
@@ -98,8 +88,6 @@ impl BlockStream {
                 .into_iter()
                 .collect::<BTreeSet<u64>>();
 
-            //self.completed.append(&mut self.should_skip);
-
             let missing_blocks = requested_blocks
                 .difference(&self.completed)
                 .cloned()
@@ -129,15 +117,9 @@ impl BlockStream {
             let blocks_left = self.to - self.from;
             let get_this_many = cmp::min(blocks_left, self.remaining_capacity() as u64);
 
-            let next_futs = {
-                if self.should_skip.len() == 0 {
-                    self.get_block_range(self.from, self.from + get_this_many, self.with_tx)
-                } else {
-                    self.get_partial_block_range(
-                        self.from, self.from + get_this_many, self.with_tx, &self.should_skip
-                    )
-                }
-            };
+            let next_futs = self.get_block_range(
+                self.from, self.from + get_this_many, self.with_tx
+            );
 
             if let YumBatchFuture::Waiting(futs) = next_futs {
                 for f in futs {
