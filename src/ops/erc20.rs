@@ -234,7 +234,16 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         },
         "d51e852630debc24e9e1041a03d80a0107f8ef0c" => {
             Some(("Orium".to_string(), "ORM".to_string(), 0))
-        }
+        },
+        "01afc37f4f85babc47c0e2d0eababc7fb49793c8" => {
+            Some(("W-GNT".to_string(), "GNTM".to_string(), 18))
+        },
+        "ce3d9c3f3d302436d12f18eca97a3b00e97be7cd" => {
+            Some(("EPOSY".to_string(), "EPOSY".to_string(), 18))
+        },
+        "289fe11c6f46e28f9f1cfc72119aee92c1da50d0" => {
+            Some(("EPOSN".to_string(), "EPOSN".to_string(), 18))
+        },
         _ => None
     }
 }
