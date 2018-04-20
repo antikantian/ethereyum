@@ -250,6 +250,12 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         "717f0cc11366818ba350aba9e7c7515ded8f8474" => {
             Some(("AiO".to_string(), "AiO".to_string(), 6))
         },
+        "b15fe5a123e647ba594cea7a1e648646f95eb4aa" => {
+            Some(("SharderToken".to_string(), "SS".to_string(), 18))
+        },
+        "20f5426df591a14b262327dc9866b0b5480a9f3f" => {
+            Some(("iBTC".to_string(), "iBTC".to_string(), 8))
+        },
         _ => None
     }
 }
