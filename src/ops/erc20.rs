@@ -244,6 +244,12 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         "289fe11c6f46e28f9f1cfc72119aee92c1da50d0" => {
             Some(("EPOSN".to_string(), "EPOSN".to_string(), 18))
         },
+        "dfbd6a960a55bcfcf59d5925351e05a51498bcef" => {
+            Some(("ROCKCoin".to_string(), "ROCK".to_string(), 0))
+        },
+        "717f0cc11366818ba350aba9e7c7515ded8f8474" => {
+            Some(("AiO".to_string(), "AiO".to_string(), 6))
+        },
         _ => None
     }
 }
