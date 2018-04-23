@@ -143,7 +143,12 @@ pub trait TokenOps: OpSet {
                 })
         };
 
-        self.request("eth_call", vec![ser(&tc), ser(&block)], op)
+        let block_num = match block {
+            BlockNumber::Name(n) => ser(&block),
+            BlockNumber::Number(n) => ser(&U256::from(n))
+        };
+
+        self.request("eth_call", vec![ser(&tc), block_num], op)
     }
 
     fn token_get_balance(&self, token: &H160, address: &H160, block: Option<BlockNumber>)
@@ -168,7 +173,11 @@ pub trait TokenOps: OpSet {
                 })
         };
 
-        self.request("eth_call", vec![ser(&tc), ser(&block)], op)
+        let block_num = match block {
+            BlockNumber::Name(n) => ser(&block),
+            BlockNumber::Number(n) => ser(&U256::from(n))
+        };
+        self.request("eth_call", vec![ser(&tc), block_num], op)
     }
 
     fn token_name(&self, address: &H160) -> YumFuture<String> {
