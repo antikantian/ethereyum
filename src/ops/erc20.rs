@@ -265,6 +265,9 @@ fn non_compliant_tokens(address: &H160) -> Option<(String, String, u8)> {
         "20f5426df591a14b262327dc9866b0b5480a9f3f" => {
             Some(("iBTC".to_string(), "iBTC".to_string(), 8))
         },
+        "6aedbf8dff31437220df351950ba2a3362168d1b" => {
+            Some(("Dragonglass".to_string(), "DGS".to_string(), 8))
+        }
         _ => None
     }
 }
